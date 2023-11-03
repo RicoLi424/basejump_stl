@@ -180,7 +180,7 @@ module bsg_cache_nb_evict_fill_transmitter
        ,.data_o(odd_bank_data_way_picked)
      );
 
-     wire filling_en = (refill_en_r|store_tag_miss_en_r);
+     wire filling_en = refill_en_r | store_tag_miss_en_r;
 
      // when evict_en_r = 1, even/odd counter increments when these conditions are met
      // we sort this out separately because at the first clk edge of eviction, we want the counters up
@@ -264,7 +264,7 @@ module bsg_cache_nb_evict_fill_transmitter
      assign odd_fifo_v_li =  (evict_odd_counter_en_li & (odd_counter_r>0)) | (((refill_en_r & dma_refill_v_i) | (store_tag_miss_en_r & ~data_writing_into_fifos_done)) & odd_fifo_ready_lo);
      assign odd_fifo_yumi_li = odd_fifo_v_lo & (evict_en_r ? (even_fifo_v_lo & piso_ready_lo) : odd_bank_v_i);
 
-     assign dma_refill_ready_o = refill_en_r & even_fifo_ready_lo & odd_fifo_ready_lo;
+     assign dma_refill_ready_o = (refill_we_i | refill_en_r) & even_fifo_ready_lo & odd_fifo_ready_lo;
      
 
      // bank fifos to dma
@@ -462,11 +462,11 @@ module bsg_cache_nb_evict_fill_transmitter
      // TODO：需要后面一直给这个bank priority的时候，由于有几个burst不用读，就可以减少cache stall的cycles
      //assign odd_bank_v_o = odd_bank_v_i & ((evict_en_r & (odd_fifo_ready_lo & (|odd_track_bits_offset_picked) & ~odd_fifo_done)) | (filling_en & odd_fifo_v_lo));
      assign odd_bank_v_o = odd_bank_v_i & ((evict_en_r & (odd_fifo_ready_lo & ~odd_fifo_done)) | (filling_en & odd_fifo_v_lo));
-     assign odd_bank_w_o = filling_en & odd_bank_v_i & odd_fifo_v_lo;
+     assign odd_bank_w_o = filling_en;
 
      //assign even_bank_v_o = even_bank_v_i & ((evict_en_r & (even_fifo_ready_lo & (|even_track_bits_offset_picked) & ~even_fifo_done)) | (filling_en & even_fifo_v_lo));
      assign even_bank_v_o = even_bank_v_i & ((evict_en_r & (even_fifo_ready_lo & ~even_fifo_done)) | (filling_en & even_fifo_v_lo));
-     assign even_bank_w_o = filling_en & even_bank_v_i & even_fifo_v_lo;
+     assign even_bank_w_o = filling_en;
 
      if (num_of_burst_per_bank_lp == 1) begin
        assign even_bank_addr_o = addr_index_r;

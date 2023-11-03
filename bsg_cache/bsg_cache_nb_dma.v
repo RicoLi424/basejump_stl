@@ -279,7 +279,7 @@ module bsg_cache_nb_dma
   logic out_fifo_valid_li;
   logic out_fifo_ready_lo;
   logic [dma_data_width_p-1:0] out_fifo_data_li;
-  logic out_fifo_valid_o;
+  logic out_fifo_valid_lo;
   logic [lg_mshr_els_lp-1:0] dma_evict_mshr_id_r;
 
   // dma evict data in counter
@@ -298,12 +298,12 @@ module bsg_cache_nb_dma
     ,.data_i(out_fifo_data_li)
     ,.v_i(out_fifo_valid_li)
     ,.ready_o(out_fifo_ready_lo)
-    ,.v_o(out_fifo_valid_o)
+    ,.v_o(out_fifo_valid_lo)
     ,.data_o(dma_data_o)
     ,.yumi_i(dma_data_yumi_i)
   );
   assign out_fifo_data_li = transmitter_evict_data_i;
-  assign dma_data_v_o = out_fifo_valid_o & dma_evict_in_counter_max;
+  assign dma_data_v_o = out_fifo_valid_lo & dma_evict_in_counter_max;
   assign out_fifo_valid_li = transmitter_evict_v_i & ~dma_evict_in_counter_max;
 
   bsg_counter_clear_up #(
@@ -323,7 +323,7 @@ module bsg_cache_nb_dma
   // Currently it has to wait for an extra cycle before next round of evicted data can be taken in
 
   assign dma_evict_in_counter_max = (dma_evict_in_counter_r == num_of_burst_lp);
-  wire dma_evict_done = dma_evict_in_counter_max & ~out_fifo_valid_o;
+  wire dma_evict_done = dma_evict_in_counter_max & ~out_fifo_valid_lo;
 
   assign evict_data_in_counter_up = transmitter_evict_v_i & out_fifo_ready_lo & ~dma_evict_in_counter_max;
   assign evict_data_in_counter_clear = dma_evict_done;

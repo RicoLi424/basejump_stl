@@ -593,8 +593,8 @@ module bsg_cache_nb
     = cache_pkt.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp];
   
 
-  wire ld_even_bank = ((decode.ld_op | decode.atomic_op) & addr_block_offset % 2 == 0);
-  wire ld_odd_bank = ((decode.ld_op | decode.atomic_op) & addr_block_offset % 2 != 0);
+  wire ld_even_bank = (v_i & (decode.ld_op | decode.atomic_op) & addr_block_offset % 2 == 0);
+  wire ld_odd_bank = (v_i & (decode.ld_op | decode.atomic_op) & addr_block_offset % 2 != 0);
 
   wire next_access_even_bank = (sbuf_v_lo & sbuf_yumi_li & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp] % 2 == 0))
                              | ld_even_bank;
@@ -603,9 +603,9 @@ module bsg_cache_nb
                             | ld_odd_bank;
 
   wire even_bank_conflict = transmitter_even_fifo_priority_lo 
-                          & (ld_even_bank | (decode.st_op & sbuf_v_lo & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp] % 2 == 0)));
+                          & (ld_even_bank | (v_i & decode.st_op & sbuf_v_lo & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp] % 2 == 0)));
   wire odd_bank_conflict = transmitter_odd_fifo_priority_lo 
-                         & (ld_odd_bank | (decode.st_op & sbuf_v_lo & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp] % 2 != 0)));
+                         & (ld_odd_bank | (v_i & decode.st_op & sbuf_v_lo & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp] % 2 != 0)));
 
   wire ld_dma_hit = decode.ld_op 
                        & (dma_refill_data_in_done_lo 
@@ -1271,7 +1271,7 @@ module bsg_cache_nb
       ,.sets_p(sets_p)
       ,.ways_p(ways_p)
       ,.mshr_els_p(mshr_els_p)
-    ) miss_handling_units (
+    ) miss_handling_unit (
       .clk_i(clk_i)
       ,.reset_i(reset_i)
 
@@ -1972,13 +1972,10 @@ module bsg_cache_nb
     if (read_miss_queue_read_in_progress_lo) begin
       src_id_o = read_miss_queue_src_id_lo;
     end
-    else if(v_v_r & return_val_op_v) begin
-      if(ld_found_in_mshr_alloc_read_miss_entry_v | ld_miss_v) begin
-        src_id_o = '0;
-      end else begin
-        src_id_o = src_id_v_r;
-      end
-    end else begin
+    else if(v_v_r & ~ld_miss_v & ~ld_found_in_mshr_alloc_read_miss_entry_v) begin
+      src_id_o = src_id_v_r;
+    end 
+    else begin
       src_id_o = '0;
     end
 
@@ -2265,7 +2262,7 @@ module bsg_cache_nb
 
   // ctrl logic
   //
-  wire serve_read_queue_output_occupied = dma_serve_read_miss_queue_v_lo & v_v_r & decode_v_r.ld_op;
+  wire serve_read_queue_output_occupied = dma_serve_read_miss_queue_v_lo & v_v_r & (decode_v_r.ld_op & ~(ld_miss_v & alloc_done_v));
   wire alloc_read_miss_entry_but_no_empty = ld_found_in_mshr_alloc_read_miss_entry_v & ~read_miss_queue_ready_lo[alloc_or_update_mshr_id_lo];
   wire st_found_in_mshr_dma_hit_but_not_written_to_dmem_yet = v_v_r & decode_v_r.st_op
                                                             & mshr_match_found_v
@@ -2285,7 +2282,7 @@ module bsg_cache_nb
               & ( v_v_r
                 ? ((v_o & yumi_i) 
                   & ~serve_read_queue_output_occupied
-                  & ~(dma_serve_read_miss_queue_v_lo & v_v_r & st_miss_v & ~alloc_done_v)
+                  & ~(dma_serve_read_miss_queue_v_lo & st_miss_v & ~alloc_done_v)
                   )
                 : 1'b1);
 
@@ -2395,8 +2392,8 @@ module bsg_cache_nb
     | (sbuf_v_lo & sbuf_yumi_li & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]%2!=0))
   );
 
-  assign data_mem_even_bank_w_li = transmitter_even_bank_w_lo | (sbuf_v_lo & sbuf_yumi_li & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]%2==0));
-  assign data_mem_odd_bank_w_li = transmitter_odd_bank_w_lo | (sbuf_v_lo & sbuf_yumi_li & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]%2!=0));
+  assign data_mem_even_bank_w_li = (transmitter_even_bank_v_lo & transmitter_even_bank_w_lo) | (sbuf_v_lo & sbuf_yumi_li & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]%2==0));
+  assign data_mem_odd_bank_w_li = (transmitter_odd_bank_v_lo & transmitter_odd_bank_w_lo) | (sbuf_v_lo & sbuf_yumi_li & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]%2!=0));
 
   assign data_mem_even_bank_data_li = transmitter_even_bank_w_lo
                                     ? transmitter_even_bank_data_lo

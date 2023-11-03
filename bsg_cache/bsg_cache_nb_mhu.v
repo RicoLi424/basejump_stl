@@ -98,9 +98,6 @@ module bsg_cache_nb_mhu
     // 同时用来判断一个mhu是否已经将evict推入fifo，好让refill data进入
     , output logic mhu_req_busy_o
 
-    // TODO: put it outside
-    //, output logic mhu_stall_o
-
   );
 
   // miss handler FSM
@@ -114,7 +111,7 @@ module bsg_cache_nb_mhu
     ,SEND_EVICT_DATA
     ,WRITE_FILL_DATA
     ,STORE_TAG_MISS
-    ,RECOVER
+    //,RECOVER
   } miss_state_e;
 
   miss_state_e miss_state_r;
