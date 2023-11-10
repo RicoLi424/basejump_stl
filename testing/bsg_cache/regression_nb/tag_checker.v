@@ -30,7 +30,7 @@ module tag_checker
     , input v_o
     , input yumi_i
     , input [word_width_p-1:0] data_o
-    , input [src_id_width_p-1:0] src_id_o
+    , input [src_id_width_p:0] src_id_o
   );
 
 
@@ -87,11 +87,11 @@ module tag_checker
     end
 
 
-    if (~reset_i & v_o & (src_id_o!=0) & yumi_i & en_i) begin
-      $display("src_id_o=%d, data_o=%x", src_id_o, data_o);
-      assert(result[src_id_o] == data_o)
+    if (~reset_i & v_o & src_id_o[src_id_width_p] & yumi_i & en_i) begin
+      $display("src_id_o=%d, data_o=%x", src_id_o[0+:src_id_width_p], data_o);
+      assert(result[src_id_o[0+:src_id_width_p]] == data_o)
         else $fatal(1, "[BSG_FATAL] Output does not match expected result. Id= %d, Expected: %x. Actual: %x",
-              src_id_o, result[src_id_o], data_o);
+              src_id_o[0+:src_id_width_p], result[src_id_o[0+:src_id_width_p]], data_o);
     end
 
   end

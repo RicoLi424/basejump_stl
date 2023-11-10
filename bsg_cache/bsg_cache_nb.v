@@ -38,7 +38,7 @@ module bsg_cache_nb
     ,output logic yumi_o
     
     ,output logic [word_width_p-1:0] data_o
-    ,output logic [src_id_width_p-1:0] src_id_o
+    ,output logic [src_id_width_p:0] src_id_o
     ,output logic v_o
     ,input yumi_i
 
@@ -2024,13 +2024,20 @@ module bsg_cache_nb
     end 
 
     if (read_miss_queue_read_in_progress_lo) begin
-      src_id_o = read_miss_queue_src_id_lo;
+      src_id_o[0+:src_id_width_p] = read_miss_queue_src_id_lo;
     end
-    else if(v_v_r & ~ld_miss_v & ~ld_found_in_mshr_alloc_read_miss_entry_v) begin
-      src_id_o = src_id_v_r;
+    else if(v_v_r) begin
+      src_id_o[0+:src_id_width_p] = src_id_v_r;
     end 
     else begin
-      src_id_o = '0;
+      src_id_o[0+:src_id_width_p] = '0;
+    end
+
+    if (read_miss_queue_read_in_progress_lo || (v_v_r & ~ld_miss_v & ~ld_found_in_mshr_alloc_read_miss_entry_v)) begin
+      src_id_o[src_id_width_p] = 1'b1;
+    end
+    else begin
+      src_id_o[src_id_width_p] = 1'b0;
     end
 
   end 

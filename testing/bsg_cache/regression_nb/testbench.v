@@ -12,7 +12,7 @@ module testbench();
   parameter src_id_width_p = 30;
   parameter addr_width_p = 32;
   parameter word_width_p = 32;
-  parameter dma_data_width_p = 256;
+  parameter dma_data_width_p = 128;
   parameter block_size_in_words_p = 16;
   parameter sets_p = 64;
   parameter ways_p = 8;
@@ -82,7 +82,7 @@ module testbench();
   logic cache_v_li;
   logic cache_yumi_lo;
 
-  logic [src_id_width_p-1:0] cache_src_id_lo;
+  logic [src_id_width_p:0] cache_src_id_lo;
   logic [word_width_p-1:0] cache_data_lo;
   logic cache_v_lo;
   logic cache_yumi_li;
@@ -438,7 +438,7 @@ module testbench();
       if (cache_v_li & cache_yumi_lo)
         sent_r <= sent_r + 1;
 
-      if (cache_v_lo & (cache_src_id_lo!=0) & cache_yumi_li)
+      if (cache_v_lo & (cache_src_id_lo[src_id_width_p]) & cache_yumi_li)
         recv_r <= recv_r + 1;
      //$display("done=%d, sent_r=%d, recv_r=%d", done, sent_r, recv_r);
      //$display("cache_v_lo=%d, cache_yumi_li=%d", cache_v_lo, cache_yumi_li);

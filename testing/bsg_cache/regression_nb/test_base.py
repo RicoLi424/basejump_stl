@@ -12,8 +12,7 @@ class TestBase:
     data_width_p = 32
     addr_width_p = 32
     self.tg = BsgCacheNonBlockingTraceGen(id_width_p,addr_width_p,data_width_p)
-    self.curr_id = 1  # start from 1 but not 0 cuz there're cases where v_o=1 but no output should be read
-                      # so in that case we use src_id=0 as a side check to indicate there's no output
+    self.curr_id = 0 
     self.curr_data = 1
     self.sets_p = 64
     self.ways_p = 8
