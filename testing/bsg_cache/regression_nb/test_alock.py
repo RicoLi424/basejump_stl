@@ -2,7 +2,6 @@ import sys
 import random
 from test_base import *
 
-
 class TestALOCK(TestBase):
 
   def generate(self):
@@ -17,16 +16,16 @@ class TestALOCK(TestBase):
       locked_tags.append(set())
 
     for iteration in range(200):
-      
+
       # lock some sets
       for n in range(25):
         index = random.randint(0,3)
-        if len(locked_tags[index]) < 6:
+        if len(locked_tags[index]) < 7:
           tag = random.randint(0,15)
           taddr = self.get_addr(tag, index)
           self.send_alock(taddr)
           locked_tags[index].add(tag)
-          #print("// index: {}, tags: {}".format(index, str(locked_tags[index])))
+          # print("// index: {}, tags: {}".format(index, str(locked_tags[index])))
 
       # random lw/sw
       for n in range(1000):

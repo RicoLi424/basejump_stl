@@ -125,6 +125,41 @@ package bsg_cache_nb_pkg;
     ,e_dma_send_evict_addr  = 2'b10
   } bsg_cache_nb_dma_cmd_e;
 
+  // Alloc MSHR Entry
+  typedef enum logic [1:0] {
+    ALLOC_IDLE
+    ,ALLOC_WRITE_TAG_AND_STAT
+    ,ALLOC_RECOVER
+    ,ALLOC_DONE
+  } alloc_mshr_state_e;
+
+  // mhu FSM
+  //
+  typedef enum logic [2:0] {
+    MHU_START
+    //,MHU_LOCK_OP
+    ,MHU_SEND_REFILL_ADDR
+    ,MHU_WAIT_SNOOP_DONE
+    ,MHU_SEND_EVICT_ADDR
+    ,MHU_SEND_EVICT_DATA
+    ,MHU_WRITE_FILL_DATA
+    ,MHU_STORE_TAG_MISS
+    //,MHU_RECOVER
+  } mhu_miss_state_e;
+
+ // mgmt miss handler FSM
+  //
+  typedef enum logic [3:0] {
+    MGMT_START
+    ,MGMT_FLUSH_OP
+    ,MGMT_LOCK_OP
+    ,MGMT_SEND_FILL_ADDR
+    ,MGMT_SEND_EVICT_ADDR
+    ,MGMT_SEND_EVICT_DATA
+    ,MGMT_GET_FILL_DATA
+    ,MGMT_RECOVER
+    ,MGMT_DONE
+  } mgmt_miss_state_e;
 
   // cache dma wormhole opcode
   // This opcode is included in the cache DMA wormhole header flit.

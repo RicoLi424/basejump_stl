@@ -132,8 +132,8 @@ module bsg_cache_nb_evict_fill_transmitter
      logic [`BSG_SAFE_MINUS(dma_data_width_p,1):0] mshr_data_low_li;
      logic [`BSG_SAFE_MINUS(dma_data_width_p,1):0] mshr_data_high_li;
 
-     logic [`BSG_WIDTH(num_of_burst_per_bank_lp+1)-1:0] even_counter_r;
-     logic [`BSG_WIDTH(num_of_burst_per_bank_lp+1)-1:0] odd_counter_r;
+     logic [`BSG_WIDTH(num_of_burst_per_bank_lp)-1:0] even_counter_r;
+     logic [`BSG_WIDTH(num_of_burst_per_bank_lp)-1:0] odd_counter_r;
      logic [`BSG_WIDTH(num_of_burst_per_bank_lp)-1:0] write_data_into_fifos_counter_r;
 
      logic even_fifo_done, odd_fifo_done;
@@ -148,6 +148,7 @@ module bsg_cache_nb_evict_fill_transmitter
      logic [`BSG_SAFE_MINUS(block_data_width_lp,1):0] mshr_data_r;
      logic [`BSG_SAFE_MINUS(block_data_mask_width_lp,1):0] mshr_data_word_mask_r;
 
+     logic store_tag_miss_fill_done;
      /*
      logic mhu_write_fill_data_in_progress_mux_lo;
      bsg_mux #(
@@ -161,6 +162,16 @@ module bsg_cache_nb_evict_fill_transmitter
      */
 
      logic [`BSG_SAFE_MINUS(dma_data_width_p,1):0] even_bank_data_way_picked, odd_bank_data_way_picked;
+
+     // since the fifo is set big enough so ready_o is always 1, it can always take in data asap 
+     // as long as there is valid data out there, so we don't need to buffer bank's out data for eviction,
+     // but if the capacity of fifo is not big enough, we need to store the data in reg first and wait for 
+     // ready_o to be 1 then enqueue, cuz the data output port of each bank is very likely to be replaced
+     // by new data, or we can simply let bank v_o be 1 only when fifo is ready
+
+     //logic [`BSG_SAFE_MINUS(dma_data_width_p,1):0] even_bank_data_way_picked_r, odd_bank_data_way_picked_r;
+
+     logic even_bank_evict_v_o_r, odd_bank_evict_v_o_r;
 
      bsg_mux #(
        .width_p(dma_data_width_p)
@@ -180,14 +191,14 @@ module bsg_cache_nb_evict_fill_transmitter
        ,.data_o(odd_bank_data_way_picked)
      );
 
-     wire filling_en = refill_en_r | store_tag_miss_en_r;
+     wire filling_en = (refill_en_r | refill_we_i) | (store_tag_miss_en_r | store_tag_miss_we_i);
 
      // when evict_en_r = 1, even/odd counter increments when these conditions are met
      // we sort this out separately because at the first clk edge of eviction, we want the counters up
      // while we don't wanna fifos to take in data as the data hasn't been read from dmem yet
      logic evict_even_counter_en_li, evict_odd_counter_en_li;
-     assign evict_even_counter_en_li = (evict_en_r & even_bank_v_i & ~even_fifo_done & even_fifo_ready_lo);
-     assign evict_odd_counter_en_li = (evict_en_r & odd_bank_v_i & ~odd_fifo_done & odd_fifo_ready_lo);
+     assign evict_even_counter_en_li = evict_en_r & even_bank_v_o;
+     assign evict_odd_counter_en_li = evict_en_r & odd_bank_v_o;
 
      // counter for store tag miss writing mshr data (or refill writing data from sipo into fifos)
      bsg_counter_set_en #(
@@ -219,7 +230,7 @@ module bsg_cache_nb_evict_fill_transmitter
       ); 
 
      bsg_counter_set_en #(
-      .max_val_p(num_of_burst_per_bank_lp+1)
+      .max_val_p(num_of_burst_per_bank_lp)
       ) even_counter (
       .clk_i(clk_i)
       ,.reset_i(reset_i)
@@ -230,7 +241,10 @@ module bsg_cache_nb_evict_fill_transmitter
       );
 
      assign even_fifo_data_li = evict_en_r ? even_bank_data_way_picked : even_bank_fill_data;
-     assign even_fifo_v_li = (evict_even_counter_en_li & (even_counter_r>0)) | (((refill_en_r & dma_refill_v_i) | (store_tag_miss_en_r & ~data_writing_into_fifos_done)) & odd_fifo_ready_lo);
+     assign even_fifo_v_li = (even_bank_evict_v_o_r) 
+                             | ((((refill_we_i | refill_en_r) & dma_refill_v_i) 
+                                | ((store_tag_miss_en_r | store_tag_miss_we_i) & ~data_writing_into_fifos_done)) 
+                              & even_fifo_ready_lo);
      assign even_fifo_yumi_li = even_fifo_v_lo & (evict_en_r ? (odd_fifo_v_lo & piso_ready_lo) : even_bank_v_i);
 
      bsg_fifo_1r1w_small #(
@@ -250,7 +264,7 @@ module bsg_cache_nb_evict_fill_transmitter
       ); 
      
      bsg_counter_set_en #(
-      .max_val_p(num_of_burst_per_bank_lp+1)
+      .max_val_p(num_of_burst_per_bank_lp)
      ) odd_counter (
       .clk_i(clk_i)
       ,.reset_i(reset_i)
@@ -261,7 +275,10 @@ module bsg_cache_nb_evict_fill_transmitter
       );
 
      assign odd_fifo_data_li = evict_en_r ? odd_bank_data_way_picked : odd_bank_fill_data;
-     assign odd_fifo_v_li =  (evict_odd_counter_en_li & (odd_counter_r>0)) | (((refill_en_r & dma_refill_v_i) | (store_tag_miss_en_r & ~data_writing_into_fifos_done)) & odd_fifo_ready_lo);
+     assign odd_fifo_v_li =  (odd_bank_evict_v_o_r) 
+                             | ((((refill_we_i | refill_en_r) & dma_refill_v_i) 
+                                | ((store_tag_miss_en_r | store_tag_miss_we_i) & ~data_writing_into_fifos_done)) 
+                               & odd_fifo_ready_lo);
      assign odd_fifo_yumi_li = odd_fifo_v_lo & (evict_en_r ? (even_fifo_v_lo & piso_ready_lo) : odd_bank_v_i);
 
      assign dma_refill_ready_o = (refill_we_i | refill_en_r) & even_fifo_ready_lo & odd_fifo_ready_lo;
@@ -300,8 +317,8 @@ module bsg_cache_nb_evict_fill_transmitter
       .width_p(word_width_p)
       ,.els_p(burst_size_in_words_lp)
      ) fill_splitter (
-      .data0_i(store_tag_miss_en_r ? mshr_data_low_li : dma_refill_data_i[0])
-      ,.data1_i(store_tag_miss_en_r ? mshr_data_high_li : dma_refill_data_i[1])
+      .data0_i((store_tag_miss_en_r | store_tag_miss_we_i) ? mshr_data_low_li : dma_refill_data_i[0])
+      ,.data1_i((store_tag_miss_en_r | store_tag_miss_we_i) ? mshr_data_high_li : dma_refill_data_i[1])
       ,.data0_o(even_bank_fill_data)
       ,.data1_o(odd_bank_fill_data)
      );
@@ -451,7 +468,7 @@ module bsg_cache_nb_evict_fill_transmitter
      assign mshr_data_low_li = mshr_data_r[(dma_data_width_p*(2*write_data_into_fifos_counter_low_bits))+:dma_data_width_p];
      assign mshr_data_high_li = mshr_data_r[(dma_data_width_p*(2*write_data_into_fifos_counter_low_bits+1))+:dma_data_width_p];
 
-     assign odd_bank_data_o = {ways_p{odd_fifo_data_lo}};
+     assign odd_bank_data_o = {ways_p{odd_fifo_data_lo}}; 
      assign even_bank_data_o = {ways_p{even_fifo_data_lo}};
      assign odd_bank_w_mask_o = way_mask_expanded & {ways_p{store_tag_miss_en_r ? odd_mshr_byte_mask_bits_offset_picked : refill_odd_bank_w_mask_offset_picked}};
      assign even_bank_w_mask_o = way_mask_expanded & {ways_p{store_tag_miss_en_r ? even_mshr_byte_mask_bits_offset_picked : refill_even_bank_w_mask_offset_picked}};
@@ -486,8 +503,8 @@ module bsg_cache_nb_evict_fill_transmitter
      assign odd_counter_o = odd_counter_r;
      assign mshr_data_write_counter_o = write_data_into_fifos_counter_r;
 
-     assign even_fifo_done = (evict_en_r & (even_counter_r==num_of_burst_per_bank_lp+1)) | (filling_en & (even_counter_r==num_of_burst_per_bank_lp));
-     assign odd_fifo_done = (evict_en_r & (odd_counter_r==num_of_burst_per_bank_lp+1)) | (filling_en & (odd_counter_r==num_of_burst_per_bank_lp));
+     assign even_fifo_done = even_counter_r==num_of_burst_per_bank_lp;
+     assign odd_fifo_done = odd_counter_r==num_of_burst_per_bank_lp;
      assign data_writing_into_fifos_done = (write_data_into_fifos_counter_r == num_of_burst_per_bank_lp);
 
      assign odd_fifo_priority_o = even_fifo_done && ~odd_fifo_done;
@@ -514,6 +531,11 @@ module bsg_cache_nb_evict_fill_transmitter
 
 
      always_ff @ (posedge clk_i) begin
+      // $display("odd_fifo_v_li:%d, odd_fifo_data_li:%h, odd_fifo_v_lo:%d", odd_fifo_v_li, odd_fifo_data_li, odd_fifo_v_lo);
+      // $display("even_fifo_v_li:%d, even_fifo_data_li:%h, even_fifo_v_lo:%d", even_fifo_v_li, even_fifo_data_li, even_fifo_v_lo);
+      // $display("odd_bank_data_o:%h, odd_bank_v_o:%d, odd_bank_w_o:%d", odd_bank_data_o, odd_bank_v_o, odd_bank_w_o);
+      // $display("even_bank_data_o:%h, even_bank_v_o:%d, even_bank_w_o:%d", even_bank_data_o, even_bank_v_o, even_bank_w_o);
+
        if (reset_i) begin
          evict_en_r <= 1'b0;
          mshr_id_r <= '0;
@@ -525,7 +547,15 @@ module bsg_cache_nb_evict_fill_transmitter
          store_tag_miss_en_r <= 1'b0;
          mshr_data_r <= '0;
          mshr_data_word_mask_r <= '0;
+         //even_bank_data_way_picked_r <= '0;
+         //odd_bank_data_way_picked_r <= '0;
+         odd_bank_evict_v_o_r <= 1'b0;
+         even_bank_evict_v_o_r <= 1'b0;
        end else begin
+
+         odd_bank_evict_v_o_r <= (odd_bank_v_i & evict_en_r & (odd_fifo_ready_lo & ~odd_fifo_done));
+         even_bank_evict_v_o_r <= (even_bank_v_i & evict_en_r & (even_fifo_ready_lo & ~even_fifo_done));
+
          if (evict_we_i) begin
            evict_en_r <= 1'b1;
          end 
@@ -541,7 +571,7 @@ module bsg_cache_nb_evict_fill_transmitter
         //   track_data_way_picked_r <= track_data_way_picked_i;
         // end
          
-         if(refill_we_i | store_tag_miss_we_i) begin
+         if (refill_we_i | store_tag_miss_we_i) begin
            mshr_data_word_mask_r <= mshr_data_byte_mask_i;
          end
 
@@ -555,15 +585,15 @@ module bsg_cache_nb_evict_fill_transmitter
            mshr_id_r <= mshr_id_i;
          end
 
-         if(evict_we_i | refill_we_i | store_tag_miss_we_i) begin
+         if (evict_we_i | refill_we_i | store_tag_miss_we_i) begin
            way_r <= way_i;
            addr_index_r <= addr_index_i;
          end
 
-         if(evict_data_sent_to_dma_done_o) evict_en_r <= 0;
-         if(dma_refill_done_o) refill_en_r <= 0;
-         if((|mhu_store_tag_miss_fill_done_o)) store_tag_miss_en_r <= 0;
-
+         if (evict_data_sent_to_dma_done_o) evict_en_r <= 0;
+         if (dma_refill_done_o) refill_en_r <= 0;
+         if ((|mhu_store_tag_miss_fill_done_o)) store_tag_miss_en_r <= 0;
+         
        end
      end
 

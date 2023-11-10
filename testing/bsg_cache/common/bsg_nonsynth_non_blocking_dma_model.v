@@ -31,7 +31,7 @@ module bsg_nonsynth_non_blocking_dma_model
     ,input reset_i
 
     ,input [dma_pkt_width_lp-1:0] dma_pkt_i
-    ,input logic dma_pkt_v_i
+    ,input dma_pkt_v_i
     ,output logic dma_pkt_yumi_o
 
     ,output logic [data_width_p-1:0] dma_data_o

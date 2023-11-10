@@ -1,9 +1,6 @@
+`include "bsg_defines.v"
 module cov_dma 
-  #(parameter `BSG_INV_PARAM(dma_data_width_p)
-    ,parameter `BSG_INV_PARAM(word_width_p)
-    ,parameter `BSG_INV_PARAM(block_size_in_words_p)
-    ,parameter num_of_burst_lp=(block_size_in_words_p*word_width_p/dma_data_width_p)
-    ,parameter counter_width_lp=`BSG_SAFE_CLOG2(num_of_burst_lp+1);
+  #(parameter `BSG_INV_PARAM(block_size_in_bursts_p)
   )
   (
     input clk_i
@@ -13,7 +10,7 @@ module cov_dma
     , input dma_refill_hold_i
     , input in_fifo_valid_li
     , input in_fifo_ready_lo
-    , input [counter_width_lp-1:0] dma_refill_data_in_counter_r
+    , input [`BSG_WIDTH(block_size_in_bursts_p)-1:0] dma_refill_data_in_counter_r
 
     , input serve_read_miss_queue_v_o
     , input mgmt_v_i
@@ -22,16 +19,17 @@ module cov_dma
 
     , input dma_refill_done
     , input transmitter_refill_done_r
-  )
+  );
 
+  wire dma_refill_data_in_counter_zero = dma_refill_data_in_counter_r==0;
 
-  covergroup cg_dma_refill_done @ (negedge clk_i iff ~reset_i);  
+  covergroup cg_dma_refill_done @ (negedge clk_i iff ~reset_i); 
 
     coverpoint dma_refill_done;
     coverpoint serve_read_miss_queue_v_o;
     coverpoint transmitter_refill_done_r;
 
-    cross serve_read_miss_queue_v_o, transmitter_refill_done_r {
+    cross dma_refill_done, serve_read_miss_queue_v_o, transmitter_refill_done_r {
       illegal_bins il0 = 
         binsof(dma_refill_done) intersect {1'b0} &&
         binsof(serve_read_miss_queue_v_o) intersect {1'b0} &&
@@ -74,30 +72,22 @@ module cov_dma
     coverpoint mshr_cam_r_v_o;
     coverpoint dma_refill_hold_i;
     coverpoint in_fifo_valid_li;
-    coverpoint in_fifo_ready_lo;
-    coverpoint dma_refill_data_in_counter_r {
-      bins zero = {0};
-      bins nz = {[(1 << counter_width_lp) - 1:1]};
-    }
+    coverpoint dma_refill_data_in_counter_zero;
 
-    cross mshr_cam_r_v_o, dma_refill_hold_i, in_fifo_valid_li, in_fifo_ready_lo, dma_refill_data_in_counter_r {
+    cross mshr_cam_r_v_o, dma_refill_hold_i, in_fifo_valid_li, dma_refill_data_in_counter_zero {
       ignore_bins v_o = 
         binsof(mshr_cam_r_v_o) intersect {1'b1};
-
-      ignore_bins n_ready = 
-        binsof(mshr_cam_r_v_o) intersect {1'b0} &&
-        binsof(in_fifo_ready_lo) intersect {1'b0};
-
-      ignore_bins full_and_v_i = 
-        binsof(dma_refill_data_in_counter_r) intersect {nz} &&
-        binsof(in_fifo_valid_li) intersect {1'b1};
 
       illegal_bins il4 = 
         binsof(mshr_cam_r_v_o) intersect {1'b0} &&
         binsof(dma_refill_hold_i) intersect {1'b0} &&
         binsof(in_fifo_valid_li) intersect {1'b1} &&
-        binsof(in_fifo_ready_lo) intersect {1'b1} &&
-        binsof(dma_refill_data_in_counter_r) intersect {zero};
+        binsof(dma_refill_data_in_counter_zero) intersect {1'b1};
+
+      illegal_bins il5 = 
+        binsof(dma_refill_hold_i) intersect {1'b1} &&
+        binsof(in_fifo_valid_li) intersect {1'b1} &&
+        binsof(dma_refill_data_in_counter_zero) intersect {1'b1};
     }
 
   endgroup

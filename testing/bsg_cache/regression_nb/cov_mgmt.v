@@ -1,4 +1,4 @@
-
+`include "bsg_defines.v"
 `include "bsg_cache_nb.vh"
 
 module cov_mgmt
@@ -25,7 +25,7 @@ module cov_mgmt
     , input [stat_info_width_lp-1:0] stat_info_i
     , input [ways_p-1:0] valid_v_i
 
-    , input miss_state_e miss_state_r
+    , input mgmt_miss_state_e miss_state_r
 
     , input goto_flush_op
     , input goto_lock_op
@@ -51,20 +51,22 @@ module cov_mgmt
   covergroup cg_n_mgmt_boot_up @ (negedge clk_i iff ~mgmt_unit_boot_up);
 
     coverpoint sbuf_empty_i;
-    coverpoint tbuf_empty_i;
+    coverpoint tbuf_empty_i {
+      bins one = {1'b1};
+      illegal_bins zero = {1'b0};
+    }
     coverpoint mgmt_v_i;
 
-    cross mgmt_v_i, sbuf_empty_i, tbuf_empty_i {
-      illegal_bins all_one = 
+    cross mgmt_v_i, sbuf_empty_i {
+      illegal_bins both_one = 
         binsof(mgmt_v_i) intersect {1'b1} &&
-        binsof(sbuf_empty_i) intersect {1'b1} &&
-        binsof(tbuf_empty_i) intersect {1'b1};
+        binsof(sbuf_empty_i) intersect {1'b1};
     }
 
   endgroup
 
 
-  covergroup cg_start @ (negedge clk_i iff miss_state_r==START);
+  covergroup cg_start @ (negedge clk_i iff miss_state_r==MGMT_START);
 
     coverpoint mgmt_unit_boot_up;
     coverpoint goto_flush_op;
@@ -79,7 +81,7 @@ module cov_mgmt
   endgroup 
 
 
-  covergroup cg_send_fill_addr @ (negedge clk_i iff miss_state_r==SEND_FILL_ADDR);
+  covergroup cg_send_fill_addr @ (negedge clk_i iff miss_state_r==MGMT_SEND_FILL_ADDR);
 
     coverpoint dma_done_i;
     coverpoint stat_dirty_chosen;
@@ -88,35 +90,34 @@ module cov_mgmt
     cross dma_done_i, stat_dirty_chosen, tag_valid_chosen {
       ignore_bins ig0 =
         binsof(tag_valid_chosen) intersect {1'b0} &&
-        binsof(stat_dirty_chosen) intersect {1'b1} &&
+        binsof(stat_dirty_chosen) intersect {1'b1};
     }
 
   endgroup
 
 
-  covergroup cg_flush @ (negedge clk_i iff miss_state_r==FLUSH_OP);
+  covergroup cg_flush @ (negedge clk_i iff miss_state_r==MGMT_FLUSH_OP);
 
     coverpoint decode_ainv;
     coverpoint stat_dirty_flush;
-    coverpoint tag_valid_flush;
+    coverpoint tag_valid_flush {
+      bins valid = {1'b1};
+      illegal_bins n_valid = {1'b0};
+    } // valid has to be 1 to go into mgmt unit and this state
 
-    cross decode_ainv, stat_dirty_flush, tag_valid_flush {
-      ignore_bins ig1 =
-        binsof(tag_valid_flush) intersect {1'b0} &&
-        binsof(stat_dirty_flush) intersect {1'b1} &&
-    }
+    cross decode_ainv, stat_dirty_flush, tag_valid_flush;
 
   endgroup
 
 
-  covergroup cg_send_evict_addr @ (negedge clk_i iff ((miss_state_r==SEND_EVICT_ADDR) || (miss_state_r==GET_FILL_DATA)));
+  covergroup cg_send_evict_addr @ (negedge clk_i iff ((miss_state_r==MGMT_SEND_EVICT_ADDR) || (miss_state_r==MGMT_GET_FILL_DATA)));
 
     coverpoint dma_done_i;
 
   endgroup
 
 
-  covergroup cg_send_evict_data @ (negedge clk_i iff miss_state_r==SEND_EVICT_DATA);
+  covergroup cg_send_evict_data @ (negedge clk_i iff miss_state_r==MGMT_SEND_EVICT_DATA);
 
     coverpoint dma_done_i;
     coverpoint decode_tagfl;
@@ -136,7 +137,7 @@ module cov_mgmt
   endgroup
 
 
-  covergroup cg_done @ (negedge clk_i iff miss_state_r==DONE);
+  covergroup cg_done @ (negedge clk_i iff miss_state_r==MGMT_DONE);
 
     coverpoint ack_i;
 

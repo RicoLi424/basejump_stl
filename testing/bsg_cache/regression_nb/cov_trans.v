@@ -21,7 +21,7 @@ module cov_trans
     , input odd_bank_v_i
 
     , input even_bank_v_o
-    . input even_bank_w_o
+    , input even_bank_w_o
     , input odd_bank_v_o
     , input odd_bank_w_o
 
@@ -38,15 +38,15 @@ module cov_trans
 
     coverpoint refill_in_progress_o;
     coverpoint evict_in_progress_o;
-    coverpoint store_tag_miss_fill_in_progress_o;
+    coverpoint store_tag_miss_fill_in_progress_o {
+      bins zero = {1'b0};
+      illegal_bins one = {1'b1};
+    }
 
     cross refill_in_progress_o, evict_in_progress_o, store_tag_miss_fill_in_progress_o {
       illegal_bins both_one = 
         binsof(refill_in_progress_o) intersect {1'b1} && 
         binsof(evict_in_progress_o) intersect {1'b1};
-      
-      illegal_bins stm_mode = 
-        binsof(store_tag_miss_fill_in_progress_o) intersect {1'b1};
     }
 
   endgroup
@@ -56,19 +56,19 @@ module cov_trans
   
     coverpoint evict_we_i;
     coverpoint refill_we_i;
-    coverpoint store_tag_miss_we_i;
-    coverpoint track_miss_i;
+    coverpoint store_tag_miss_we_i {
+      bins zero = {1'b0};
+      illegal_bins one = {1'b1};
+    }
+    coverpoint track_miss_i {
+      bins z = {1'b0};
+      illegal_bins o = {1'b1};
+    }
 
     cross evict_we_i, refill_we_i, store_tag_miss_we_i, track_miss_i {
       illegal_bins evict_refill = 
         binsof(evict_we_i) intersect {1'b1} && 
         binsof(refill_we_i) intersect {1'b1};
-
-      illegal_bins stm = 
-        binsof(store_tag_miss_we_i) intersect {1'b1};
-
-      illegal_bins tm = 
-        binsof(track_miss_i) intersect {1'b1};
     }
 
   endgroup
@@ -104,6 +104,12 @@ module cov_trans
       ignore_bins n_evict_v = 
         binsof(dma_evict_v_o) intersect {1'b0} &&
         binsof(dma_evict_yumi_i) intersect {1'b1};
+
+      // Current design will have always finished sending all the data out of fifo
+      // before next round of data is ready on transmitter side
+      ignore_bins n_evict_yumi =
+        binsof(dma_evict_v_o) intersect {1'b1} &&
+        binsof(dma_evict_yumi_i) intersect {1'b0};
     }
 
   endgroup

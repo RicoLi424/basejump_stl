@@ -3,14 +3,13 @@
 
 module basic_checker 
   import bsg_cache_nb_pkg::*;
-  #(parameter `BSG_INV_PARAM(data_width_p)
+  #(parameter `BSG_INV_PARAM(word_width_p)
     , parameter `BSG_INV_PARAM(src_id_width_p)
     , parameter `BSG_INV_PARAM(addr_width_p)
-    , parameter `BSG_INV_PARAM(cache_pkt_width_lp)
-    , parameter data_mask_width_lp=(data_width_p>>3)
+    , parameter data_mask_width_lp=(word_width_p>>3)
     , parameter `BSG_INV_PARAM(mem_size_p)
 
-    , parameter bsg_cache_nb_pkt_width_lp=`bsg_cache_nb_pkt_width(addr_width_p,data_width_p,src_id_width_p)
+    , parameter bsg_cache_nb_pkt_width_lp=`bsg_cache_nb_pkt_width(addr_width_p,word_width_p,src_id_width_p)
   )
   (
     input clk_i
@@ -23,24 +22,24 @@ module basic_checker
     , input v_i
 
     , input [src_id_width_p-1:0] src_id_o
-    , input [data_width_p-1:0] data_o
+    , input [word_width_p-1:0] data_o
     , input v_o
     , input yumi_i
   );
 
-  `declare_bsg_cache_nb_pkt_s(addr_width_p,data_width_p,src_id_width_p);
+  `declare_bsg_cache_nb_pkt_s(addr_width_p,word_width_p,src_id_width_p);
   bsg_cache_nb_pkt_s cache_pkt;
   assign cache_pkt = cache_pkt_i;
  
 
   // shadow mem
-  logic [data_width_p-1:0] shadow_mem [mem_size_p-1:0];
-  logic [data_width_p-1:0] result [*];
+  logic [word_width_p-1:0] shadow_mem [mem_size_p-1:0];
+  logic [word_width_p-1:0] result [*];
 
   wire [addr_width_p-1:0] cache_pkt_word_addr = cache_pkt.addr[addr_width_p-1:2];
 
   // store logic
-  logic [data_width_p-1:0] store_data;
+  logic [word_width_p-1:0] store_data;
   logic [data_mask_width_lp-1:0] store_mask;
 
   always_comb begin
@@ -82,7 +81,7 @@ module basic_checker
   end
 
   // load logic
-  logic [data_width_p-1:0] load_data, load_data_final;
+  logic [word_width_p-1:0] load_data, load_data_final;
   logic [7:0] byte_sel;
   logic [15:0] half_sel;
 
@@ -106,7 +105,7 @@ module basic_checker
     ,.data_o(half_sel)
   );
 
-  logic [data_width_p-1:0] load_mask;
+  logic [word_width_p-1:0] load_mask;
   bsg_expand_bitmask #(
     .in_width_p(4)
     ,.expand_p(8)
@@ -204,7 +203,7 @@ module basic_checker
 
         // output checker
         if (~reset_i & v_o & (src_id_o!=0) & yumi_i & en_i) begin
-          $display("src_id_o=%d, data_o=%x", src_id_o, data_o);
+          $display("src_id_o=%d, data_o=%x", src_id_o, data_o); 
           assert(result[src_id_o] == data_o)
             else $fatal(1, "[BSG_FATAL] output does not match expected result. Id=%d, Expected: %x. Actual: %x.",
                     src_id_o, result[src_id_o], data_o);

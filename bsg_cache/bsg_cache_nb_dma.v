@@ -19,8 +19,8 @@ module bsg_cache_nb_dma
     ,parameter word_mask_width_lp=(word_width_p>>3)
     ,parameter lg_word_mask_width_lp=`BSG_SAFE_CLOG2(word_mask_width_lp)
     ,parameter dma_data_mask_width_lp=(dma_data_width_p>>3)
-    ,parameter num_of_burst_lp=(block_size_in_words_p*word_width_p/dma_data_width_p)
-    ,parameter lg_num_of_burst_lp=`BSG_SAFE_CLOG2(num_of_burst_lp)
+    ,parameter block_size_in_bursts_lp=(block_size_in_words_p*word_width_p/dma_data_width_p)
+    ,parameter lg_block_size_in_bursts_lp=`BSG_SAFE_CLOG2(block_size_in_bursts_lp)
     ,parameter burst_size_in_words_lp=(dma_data_width_p/word_width_p)
     ,parameter lg_burst_size_in_words_lp=`BSG_SAFE_CLOG2(burst_size_in_words_lp)
     ,parameter block_data_width_lp= (block_size_in_words_p*word_width_p)
@@ -55,9 +55,13 @@ module bsg_cache_nb_dma
 
     // This signal is used to prevent a case where the yumi_i for evict data just doesn't come
     // but refill process has been finished, then the refill done signal will go to mhu earlier
-    // than the evict done signal, which will cause the deletion of corresponding mshr entry
-    // take place at wrong time
+    // than the evict done signal, or at the same cycle as evict done so the mhu will wait for 
+    // the other one forever there
     , input [`BSG_SAFE_MINUS(mshr_els_p,1):0] mhu_write_fill_data_in_progress_i
+    // This signal is to avoid a case where refill data has come back,
+    // but the mhu is still in WAIT_SNOOP_DONE state, in that case the new
+    // data will be written to DMEM before the old data is evicted
+    , input [`BSG_SAFE_MINUS(mshr_els_p,1):0] mhu_evict_enqueued_i
     , input [`BSG_SAFE_MINUS(mshr_els_p,1):0] transmitter_mhu_store_tag_miss_done_i
     , output logic [`BSG_SAFE_MINUS(mshr_els_p,1):0] mhu_dma_done_o
     , output logic mgmt_dma_done_o
@@ -66,7 +70,13 @@ module bsg_cache_nb_dma
     // but that cache line that is being refilled while not finish writing into DMEM yet
     // In this way a new read miss queue entry is unnecassary to be allocated
     , input [lg_block_size_in_words_lp-1:0] addr_block_offset_v_i
-    , output logic [`BSG_WIDTH(num_of_burst_lp)-1:0] dma_refill_data_in_counter_o
+    , output logic [`BSG_WIDTH(block_size_in_bursts_lp)-1:0] dma_refill_data_in_counter_o
+
+    // This is used for case where we have a ld in tl stage and that line is in mshr,
+    // but before it moves to tv, the mshr entry is cleared, so we gotta get the data from 
+    // DMA ahead of time so we will not have to recover in that case
+    , input [lg_block_size_in_words_lp-1:0] addr_block_offset_tl_i
+    , output logic [word_width_p-1:0] snoop_data_combined_to_tl_o 
 
     , output logic [word_width_p-1:0] snoop_word_o
     , output logic serve_read_miss_queue_v_o
@@ -114,7 +124,7 @@ module bsg_cache_nb_dma
     // This could be later used for pipeline's data combination before writing into sipo
     // which could help reduce the numebr of stall cycles to some degree
     // (if there's a store instruction which wants to write data into the line which is being refilled)
-    , output logic [`BSG_WIDTH(num_of_burst_lp)-1:0] dma_refill_data_out_to_sipo_counter_o
+    , output logic [`BSG_WIDTH(block_size_in_bursts_lp)-1:0] dma_refill_data_out_to_sipo_counter_o
     , output logic dma_refill_data_in_done_o
     , output logic dma_refill_in_progress_o
     , output logic transmitter_refill_done_o
@@ -128,7 +138,7 @@ module bsg_cache_nb_dma
 
   // localparam
   //
-  localparam counter_width_lp=`BSG_SAFE_CLOG2(num_of_burst_lp+1);
+  // localparam counter_width_lp=`BSG_SAFE_CLOG2(block_size_in_bursts_lp+1);
   localparam byte_offset_width_lp=`BSG_SAFE_CLOG2(word_width_p>>3);
   localparam block_offset_width_lp=(block_size_in_words_p > 1) ? byte_offset_width_lp+lg_block_size_in_words_lp : byte_offset_width_lp;
 
@@ -145,7 +155,7 @@ module bsg_cache_nb_dma
   logic in_fifo_yumi_li;
   logic in_fifo_valid_li;
   logic in_fifo_ready_lo;
-  logic sipo_ready_lo;
+  logic sipo_ready_lo, sipo_yumi_li, sipo_v_lo;
   logic [dma_data_width_p-1:0] sipo_data_li;
   logic [lg_mshr_els_lp-1:0] dma_refill_mshr_id_r;
 
@@ -153,7 +163,7 @@ module bsg_cache_nb_dma
   //
   logic refill_data_in_counter_clear;
   logic refill_data_in_counter_up;
-  logic [counter_width_lp-1:0] dma_refill_data_in_counter_r;
+  logic [`BSG_WIDTH(block_size_in_bursts_lp)-1:0] dma_refill_data_in_counter_r;
   logic transmitter_refill_done_r;
   logic dma_refill_data_in_counter_max;
 
@@ -161,12 +171,12 @@ module bsg_cache_nb_dma
   //
   logic refill_data_out_to_sipo_counter_clear;
   logic refill_data_out_to_sipo_counter_up;
-  logic [counter_width_lp-1:0] dma_refill_data_out_to_sipo_counter_r;
-  wire [lg_num_of_burst_lp-1:0] dma_refill_data_out_to_sipo_counter_low_bits = dma_refill_data_out_to_sipo_counter_r[0+:lg_num_of_burst_lp];
+  logic [`BSG_WIDTH(block_size_in_bursts_lp)-1:0] dma_refill_data_out_to_sipo_counter_r;
+  wire [lg_block_size_in_bursts_lp-1:0] dma_refill_data_out_to_sipo_counter_low_bits = dma_refill_data_out_to_sipo_counter_r[0+:lg_block_size_in_bursts_lp];
 
   bsg_fifo_1r1w_small #(
     .width_p(dma_data_width_p)
-    ,.els_p((num_of_burst_lp<2) ? 2 : num_of_burst_lp)
+    ,.els_p((block_size_in_bursts_lp<2) ? 2 : block_size_in_bursts_lp)
   ) in_fifo (
     .clk_i(clk_i)
     ,.reset_i(reset_i)
@@ -195,7 +205,7 @@ module bsg_cache_nb_dma
   bsg_mux_segmented #(
     .segments_p(dma_data_mask_width_lp)
     ,.segment_width_p(8)
-  ) combine_mshr_data (
+  ) combine_mshr_data_to_refill (
     .data0_i(in_fifo_data_lo)
     ,.data1_i(mshr_data_r[dma_refill_data_out_to_sipo_counter_low_bits*dma_data_width_p +: dma_data_width_p])
     ,.sel_i(mshr_data_byte_mask_r[dma_refill_data_out_to_sipo_counter_low_bits*dma_data_mask_width_lp +: dma_data_mask_width_lp])
@@ -212,18 +222,23 @@ module bsg_cache_nb_dma
     ,.ready_o(sipo_ready_lo)
     ,.data_i(sipo_data_li) 
     ,.data_o(transmitter_refill_data_o)
-    ,.v_o(transmitter_refill_v_o)
+    ,.v_o(sipo_v_lo)
     ,.yumi_i(sipo_yumi_li)
   );
-
+  
+  // We wait for the evict enqueue signal but not mhu write in process signal so that when the evict data
+  // are all sent from transmitter to dma, the refill data can go into transmitter right away if possible
+  // We are assured that as long as the evict is enqueued, old data will be evicted first before refill data
+  // are written to DMEM because the transmitter always takes undone evict operation as the highest priority
+  assign transmitter_refill_v_o = sipo_v_lo & (mgmt_v_i ? 1'b1 : mhu_evict_enqueued_i[dma_refill_mshr_id_r]);
   assign sipo_yumi_li = transmitter_refill_v_o & transmitter_refill_ready_i;
-
+  
   wire dma_refill_done = ~serve_read_miss_queue_v_o & transmitter_refill_done_r; 
 
   logic [`BSG_SAFE_MINUS(mshr_els_p,1):0] dma_refill_done_v_lo;
 
   bsg_counter_clear_up #(
-    .max_val_p(num_of_burst_lp)
+    .max_val_p(block_size_in_bursts_lp)
    ,.init_val_p('0)
   ) dma_refill_data_in_counter (
     .clk_i(clk_i)
@@ -233,7 +248,7 @@ module bsg_cache_nb_dma
     ,.count_o(dma_refill_data_in_counter_r)
   );
 
-  assign dma_refill_data_in_counter_max = (dma_refill_data_in_counter_r == num_of_burst_lp);
+  assign dma_refill_data_in_counter_max = (dma_refill_data_in_counter_r == block_size_in_bursts_lp);
   assign refill_data_in_counter_up = in_fifo_valid_li & in_fifo_ready_lo;
   assign refill_data_in_counter_clear = mgmt_v_i ? dma_refill_done : (|dma_refill_done_v_lo);
 
@@ -243,7 +258,7 @@ module bsg_cache_nb_dma
   assign dma_refill_data_in_counter_o = dma_refill_data_in_counter_r;
 
   bsg_counter_clear_up #(
-    .max_val_p(num_of_burst_lp)
+    .max_val_p(block_size_in_bursts_lp)
    ,.init_val_p('0)
   ) dma_refill_data_out_to_sipo_counter (
     .clk_i(clk_i)
@@ -253,7 +268,7 @@ module bsg_cache_nb_dma
     ,.count_o(dma_refill_data_out_to_sipo_counter_r)
   );
 
-  //wire dma_refill_data_out_to_sipo_counter_max = (dma_refill_data_out_to_sipo_counter_r == num_of_burst_lp);
+  //wire dma_refill_data_out_to_sipo_counter_max = (dma_refill_data_out_to_sipo_counter_r == block_size_in_bursts_lp);
   assign refill_data_out_to_sipo_counter_up = in_fifo_v_lo & sipo_ready_lo;
   assign refill_data_out_to_sipo_counter_clear = refill_data_in_counter_clear;
 
@@ -287,11 +302,11 @@ module bsg_cache_nb_dma
   logic evict_data_in_counter_clear;
   logic evict_data_in_counter_up;
   logic dma_evict_in_counter_max;
-  logic [counter_width_lp-1:0] dma_evict_in_counter_r;
+  logic [`BSG_WIDTH(block_size_in_bursts_lp)-1:0] dma_evict_in_counter_r;
 
   bsg_fifo_1r1w_small #(
     .width_p(dma_data_width_p)
-    ,.els_p((num_of_burst_lp<2) ? 2 : num_of_burst_lp)
+    ,.els_p((block_size_in_bursts_lp<2) ? 2 : block_size_in_bursts_lp)
   ) out_fifo (
     .clk_i(clk_i)
     ,.reset_i(reset_i)
@@ -307,7 +322,7 @@ module bsg_cache_nb_dma
   assign out_fifo_valid_li = transmitter_evict_v_i & ~dma_evict_in_counter_max;
 
   bsg_counter_clear_up #(
-    .max_val_p(num_of_burst_lp)
+    .max_val_p(block_size_in_bursts_lp)
    ,.init_val_p('0)
   ) dma_evict_data_in_counter (
     .clk_i(clk_i)
@@ -322,8 +337,14 @@ module bsg_cache_nb_dma
   // In this way we can take in new evicted data in the right next cycle after last round of eviction is done
   // Currently it has to wait for an extra cycle before next round of evicted data can be taken in
 
-  assign dma_evict_in_counter_max = (dma_evict_in_counter_r == num_of_burst_lp);
-  wire dma_evict_done = dma_evict_in_counter_max & ~out_fifo_valid_lo;
+  assign dma_evict_in_counter_max = (dma_evict_in_counter_r == block_size_in_bursts_lp);
+
+  // It happened ocassionally that refill and evict are done at just the same cycle for mgmt, in that case
+  // the tag_mgmt will only receive one dma_done signal, then it just hangs in GET_FILL_DATA state 4ever
+  // so to avoid that, these two done signals cannot be pulled up to 1 in the same cycle
+  // For tag_mgmt state machine, it doesn't matter which done signal comes first, and since dma_refill_done
+  // is set as a wire above first, so we let evict wait for one more cycle if refill is done in the same cycle
+  wire dma_evict_done = dma_evict_in_counter_max & ~out_fifo_valid_lo & (mgmt_v_i ? ~dma_refill_done : 1'b1);
 
   assign evict_data_in_counter_up = transmitter_evict_v_i & out_fifo_ready_lo & ~dma_evict_in_counter_max;
   assign evict_data_in_counter_clear = dma_evict_done;
@@ -421,11 +442,11 @@ module bsg_cache_nb_dma
   assign transmitter_refill_done_o = transmitter_refill_done_r;
   assign dma_refill_data_out_to_sipo_counter_o = dma_refill_data_out_to_sipo_counter_r;
   assign dma_refill_mshr_id_o = dma_refill_mshr_id_r;
-  assign mshr_cam_r_v_o = ~dma_refill_hold_i & in_fifo_valid_li & in_fifo_ready_lo & (dma_refill_data_in_counter_r == 0);
+  assign mshr_cam_r_v_o = in_fifo_valid_li & in_fifo_ready_lo & (dma_refill_data_in_counter_r == 0);
 
   for(genvar i=0; i<safe_mshr_els_lp; i++) begin: done_signal
 
-    assign dma_refill_done_v_lo[i] = ((i==dma_refill_mshr_id_r) & dma_refill_done & mhu_write_fill_data_in_progress_i[i] & ~dma_refill_hold_i & ~(|transmitter_mhu_store_tag_miss_done_i));
+    assign dma_refill_done_v_lo[i] = ((i==dma_refill_mshr_id_r) & dma_refill_done & ~dma_refill_hold_i & mhu_write_fill_data_in_progress_i[dma_refill_mshr_id_r] & ~(|transmitter_mhu_store_tag_miss_done_i));
     assign mhu_dma_done_o[i] = (~mgmt_v_i & (i==mhu_req_mshr_id_i) & dma_req_done)
                                | (~mgmt_v_i & (i==dma_evict_mshr_id_r) & dma_evict_done)
                                | (~mgmt_v_i & dma_refill_done_v_lo[i]);
@@ -436,8 +457,8 @@ module bsg_cache_nb_dma
   
   // snoop_data register
   logic [block_data_width_lp-1:0] snoop_data_r;
-  logic [lg_num_of_burst_lp-1:0] dma_refill_counter_low_bits;
-  assign dma_refill_counter_low_bits = dma_refill_data_in_counter_r[0+:lg_num_of_burst_lp];
+  logic [lg_block_size_in_bursts_lp-1:0] dma_refill_counter_low_bits;
+  assign dma_refill_counter_low_bits = dma_refill_data_in_counter_r[0+:lg_block_size_in_bursts_lp];
 
   always_ff @(posedge clk_i) begin
       if (reset_i) begin
@@ -474,9 +495,33 @@ module bsg_cache_nb_dma
                       ? snoop_data_offset_picked_combined 
                       : snoop_data_offset_picked;
 
+  // Snoop word to tl stage for that special case
+  logic [word_width_p-1:0] snoop_data_tl_offset_picked;
+  bsg_mux #(
+    .width_p(word_width_p)
+    ,.els_p(block_size_in_words_p)
+  ) snoop_tl_mux (
+    .data_i(snoop_data_r)
+    ,.sel_i(addr_block_offset_tl_i)
+    ,.data_o(snoop_data_tl_offset_picked)
+  );
+
+  bsg_mux_segmented #(
+    .segments_p(word_mask_width_lp)
+    ,.segment_width_p(8)
+  ) snoop_word_combine_with_mshr_data_to_tl_stage (
+    .data0_i(snoop_data_tl_offset_picked)
+    ,.data1_i(mshr_data_r[addr_block_offset_tl_i*word_width_p +: word_width_p])
+    ,.sel_i(mshr_data_byte_mask_r[addr_block_offset_tl_i*word_mask_width_lp +: word_mask_width_lp])
+    ,.data_o(snoop_data_combined_to_tl_o)
+  );
+
   // synopsys translate_off
   
   always_ff @ (posedge clk_i) begin
+    //  $display("dma_refill_done:%d, serve_read_miss_queue_v_o:%d, transmitter_refill_done_r:%d, dma_refill_hold_i:%d, read_miss_queue_read_in_progress_i:%d", 
+    //            dma_refill_done, serve_read_miss_queue_v_o, transmitter_refill_done_r, dma_refill_hold_i, read_miss_queue_read_in_progress_i);
+
     if (debug_p) begin
       if (dma_pkt_v_o & dma_pkt_yumi_i) begin
         $display("<VCACHE> DMA_PKT we:%0d addr:%8h // %8t",

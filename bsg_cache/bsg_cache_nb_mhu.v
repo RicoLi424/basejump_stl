@@ -93,6 +93,10 @@ module bsg_cache_nb_mhu
 
     // To dma so the refill_done signal can only come after an evict_done
     , output logic write_fill_data_in_progress_o
+    // output this signal to DMA to avoid a case where refill data has come back,
+    // but the state machine is still in WAIT_SNOOP_DONE, in that case the new
+    // data will be written to DMEM before the old data is evicted
+    , output logic evict_enqueued_o
 
     // TODO:外部用这个来选择dma的mhu_req_mshr_id_i
     // 同时用来判断一个mhu是否已经将evict推入fifo，好让refill data进入
@@ -100,22 +104,8 @@ module bsg_cache_nb_mhu
 
   );
 
-  // miss handler FSM
-  //
-  typedef enum logic [2:0] {
-    START
-    //,LOCK_OP
-    ,SEND_REFILL_ADDR
-    ,WAIT_SNOOP_DONE
-    ,SEND_EVICT_ADDR
-    ,SEND_EVICT_DATA
-    ,WRITE_FILL_DATA
-    ,STORE_TAG_MISS
-    //,RECOVER
-  } miss_state_e;
-
-  miss_state_e miss_state_r;
-  miss_state_e miss_state_n;
+  mhu_miss_state_e miss_state_r;
+  mhu_miss_state_e miss_state_n;
 
   logic track_miss_r;
   logic mshr_stm_miss_r;
@@ -125,12 +115,13 @@ module bsg_cache_nb_mhu
   logic [cache_line_offset_width_lp-1:0] curr_cache_line_offset_r;
   logic store_tag_miss_op_r, store_tag_miss_op_n;
   //logic alock_op_r;
-  logic st_op_r, atomic_op_r;
+  //logic st_op_r, atomic_op_r;
   logic [lg_ways_lp-1:0] chosen_way_r;
-  logic [tag_width_lp-1:0] tag_mem_tag_way_picked_r, tag_mem_tag_way_picked_n;
+  logic [tag_width_lp-1:0] tag_mem_tag_way_picked_r;
   //logic mhu_done;
   //logic [lg_ways_lp-1:0] chosen_way_n;
   logic [stat_info_width_lp-1:0] stat_info_r;
+  logic [ways_p-1:0] valid_v_r;
 
   // FIXME  
   // bsg_mux #(
@@ -143,8 +134,8 @@ module bsg_cache_nb_mhu
   // );
 
   `declare_bsg_cache_nb_stat_info_s(ways_p);
-  bsg_cache_nb_stat_info_s stat_info_in;
-  assign stat_info_in = stat_info_r;
+  bsg_cache_nb_stat_info_s stat_info;
+  assign stat_info = stat_info_r;
 
   // bsg_dff_reset_en_bypass #(
   //   .width_p(lg_ways_lp)
@@ -184,8 +175,9 @@ module bsg_cache_nb_mhu
 
 
   always_ff @ (posedge clk_i) begin
+    // $display("mhu_miss_state:%b", miss_state_r); TODO
     if (reset_i) begin
-      miss_state_r <= START;
+      miss_state_r <= MHU_START;
       //chosen_way_r <= '0;
       track_miss_r <= 1'b0;
       //st_op_r <= 1'b0;
@@ -194,11 +186,11 @@ module bsg_cache_nb_mhu
       store_tag_miss_op_r <= 1'b0;
       curr_cache_line_offset_r <= '0;
       tag_mem_tag_way_picked_r <= '0;
+      valid_v_r <= '0;
     end else begin
 
       miss_state_r <= miss_state_n;
       store_tag_miss_op_r <= store_tag_miss_op_n;
-      tag_mem_tag_way_picked_r <= tag_mem_tag_way_picked_n;
       //chosen_way_r <= chosen_way_n;
 
       if (mhu_we_i) begin
@@ -211,6 +203,8 @@ module bsg_cache_nb_mhu
         //chosen_way_r <= chosen_way_i;
         //store_tag_miss_op_r <= store_tag_miss_op_i;
         stat_info_r <= stat_info_i;
+        tag_mem_tag_way_picked_r <= tag_v_i[chosen_way_i];
+        valid_v_r <= valid_v_i;
       end
 
       //FIXME
@@ -259,7 +253,6 @@ module bsg_cache_nb_mhu
     //recover_o = '0;FIXME
     //mhu_done = '0;
     store_tag_miss_op_n = store_tag_miss_op_r;
-    tag_mem_tag_way_picked_n = tag_mem_tag_way_picked_r;
 
     evict_v_o = '0;
     store_tag_miss_fill_v_o = '0;
@@ -270,6 +263,7 @@ module bsg_cache_nb_mhu
     //mhu_write_track_v_o = '0;
 
     write_fill_data_in_progress_o = '0;
+    evict_enqueued_o = '0;
 
     mhu_req_busy_o = '0;
 
@@ -277,12 +271,12 @@ module bsg_cache_nb_mhu
 
       // miss handler waits in this state, until the miss is detected in tv stage.
       // if an mshr miss of store tag miss happens during this state, set store tag miss op to 0.
-      START: begin
+      MHU_START: begin
         miss_state_n = mhu_activate_i
                      ? ((store_tag_miss_op_r & ~mshr_stm_miss_r) 
-                         ? STORE_TAG_MISS 
-                         : SEND_REFILL_ADDR)
-                     : START;
+                         ? MHU_STORE_TAG_MISS 
+                         : MHU_SEND_REFILL_ADDR)
+                     : MHU_START;
         //mhu_read_tag_and_stat_v_o = mhu_activate_i & ~track_miss_r;
         //mhu_read_track_v_o = mhu_activate_i & track_miss_r;
         store_tag_miss_op_n = mhu_we_i 
@@ -295,7 +289,7 @@ module bsg_cache_nb_mhu
       // Send out the missing cache block address (to read).
       // Choose a block to replace/fill.
       // If the chosen block is dirty, then take evict route.
-      SEND_REFILL_ADDR: begin
+      MHU_SEND_REFILL_ADDR: begin
         //chosen_way_n = chosen_way_i;
         dma_cmd_o = e_dma_send_refill_addr;         
         dma_addr_o = {
@@ -308,40 +302,39 @@ module bsg_cache_nb_mhu
         // or there's a store in tl which wants to write on the chosen way, then evict.
         miss_state_n = dma_done_i
                      ? (store_tag_miss_op_r
-                       ? SEND_EVICT_DATA
-                       : ((track_miss_r | (~(stat_info_in.dirty[chosen_way_r] & valid_v_i[chosen_way_r]))) //& ~tl_store_on_chosen_way_found_i))
-                         ? WRITE_FILL_DATA 
+                       ? MHU_SEND_EVICT_DATA
+                       : ((track_miss_r | (~(stat_info.dirty[chosen_way_r] & valid_v_r[chosen_way_r]))) //& ~tl_store_on_chosen_way_found_i))
+                         ? MHU_WRITE_FILL_DATA 
                          //: ((~tl_store_on_chosen_way_found_i & ~sbuf_or_tbuf_chosen_way_found_i)
                          : (~sbuf_or_tbuf_chosen_way_found_i
-                           ? SEND_EVICT_ADDR
-                           : WAIT_SNOOP_DONE)))
-                     : SEND_REFILL_ADDR;
+                           ? MHU_SEND_EVICT_ADDR
+                           : MHU_WAIT_SNOOP_DONE)))
+                     : MHU_SEND_REFILL_ADDR;
 
-        //mhu_write_tag_and_stat_v_o = (miss_state_n == WRITE_FILL_DATA) | (miss_state_n == SEND_EVICT_ADDR);
-        //mhu_read_track_v_o = (miss_state_n == SEND_EVICT_ADDR); 
+        //mhu_write_tag_and_stat_v_o = (miss_state_n == MHU_WRITE_FILL_DATA) | (miss_state_n == MHU_SEND_EVICT_ADDR);
+        //mhu_read_track_v_o = (miss_state_n == MHU_SEND_EVICT_ADDR); 
         //mhu_read_tag_and_stat_v_o = ~store_tag_miss_op_r & ~dma_done_i; 
         mhu_req_busy_o = 1'b1; 
-        tag_mem_tag_way_picked_n = store_tag_miss_op_r ? tag_mem_tag_way_picked_r : tag_v_i[chosen_way_r];
-        evict_v_o = (miss_state_n == SEND_EVICT_DATA);
-        store_tag_miss_fill_v_o = (miss_state_n==SEND_EVICT_DATA);
-        //mhu_write_track_v_o = (miss_state_n==SEND_EVICT_DATA) | (miss_state_n==WRITE_FILL_DATA);
+        evict_v_o = (miss_state_n == MHU_SEND_EVICT_DATA);
+        store_tag_miss_fill_v_o = (miss_state_n==MHU_SEND_EVICT_DATA);
+        //mhu_write_track_v_o = (miss_state_n==MHU_SEND_EVICT_DATA) | (miss_state_n==MHU_WRITE_FILL_DATA);
       end
     
       // wait until there's no entry in sbuf/tbuf that has the same way as the chosen way,
       // and tl and tv don't have the chosen way either.
-      WAIT_SNOOP_DONE: begin 
+      MHU_WAIT_SNOOP_DONE: begin 
         miss_state_n = //(~tl_store_on_chosen_way_found_i & ~sbuf_or_tbuf_chosen_way_found_i)
                      ~sbuf_or_tbuf_chosen_way_found_i
-                     ? SEND_EVICT_ADDR
-                     : WAIT_SNOOP_DONE;
+                     ? MHU_SEND_EVICT_ADDR
+                     : MHU_WAIT_SNOOP_DONE;
 
-        //mhu_write_tag_and_stat_v_o = (miss_state_n == SEND_EVICT_ADDR);  
-        //mhu_read_track_v_o = (miss_state_n == SEND_EVICT_ADDR); 
+        //mhu_write_tag_and_stat_v_o = (miss_state_n == MHU_SEND_EVICT_ADDR);  
+        //mhu_read_track_v_o = (miss_state_n == MHU_SEND_EVICT_ADDR); 
         mhu_req_busy_o = 1'b1;
       end
 
       // Send out the block addr for eviction, before initiating the eviction.
-      SEND_EVICT_ADDR: begin
+      MHU_SEND_EVICT_ADDR: begin
         dma_cmd_o = e_dma_send_evict_addr;
         dma_addr_o = {
           tag_mem_tag_way_picked_r,
@@ -351,15 +344,15 @@ module bsg_cache_nb_mhu
 
         miss_state_n = dma_done_i
                      ? ((store_tag_miss_op_r & mshr_stm_miss_r) 
-                       ? SEND_REFILL_ADDR
-                       : SEND_EVICT_DATA)
-                     : SEND_EVICT_ADDR;
+                       ? MHU_SEND_REFILL_ADDR
+                       : MHU_SEND_EVICT_DATA)
+                     : MHU_SEND_EVICT_ADDR;
 
         //mhu_read_track_v_o = ~dma_done_i; 
         mhu_req_busy_o = 1'b1;
-        evict_v_o = (miss_state_n==SEND_EVICT_DATA);
-        store_tag_miss_fill_v_o = (miss_state_n==SEND_EVICT_DATA) & store_tag_miss_op_r;
-        //mhu_write_track_v_o = (miss_state_n==SEND_EVICT_DATA) & store_tag_miss_fill_v_o;
+        evict_v_o = (miss_state_n==MHU_SEND_EVICT_DATA);
+        store_tag_miss_fill_v_o = (miss_state_n==MHU_SEND_EVICT_DATA) & store_tag_miss_op_r;
+        //mhu_write_track_v_o = (miss_state_n==MHU_SEND_EVICT_DATA) & store_tag_miss_fill_v_o;
       end
 
       // BUG: 如果dma的evict data一直不被yumi，会出现先返回refill的done
@@ -368,53 +361,54 @@ module bsg_cache_nb_mhu
       // TODO:has been fixed by 'write_fill_data_in_progress_o'
 
       // wait for dma to return evict done signal
-      SEND_EVICT_DATA: begin
+      MHU_SEND_EVICT_DATA: begin
         miss_state_n = dma_done_i
-                     ? WRITE_FILL_DATA
-                     : SEND_EVICT_DATA;
+                     ? MHU_WRITE_FILL_DATA
+                     : MHU_SEND_EVICT_DATA;
+        evict_enqueued_o = 1'b1;
       end
 
       // wait for dma to return refill done signal or transmitter to return store tag miss fill done signal
-      WRITE_FILL_DATA: begin
+      MHU_WRITE_FILL_DATA: begin
+        evict_enqueued_o = 1'b1;
         write_fill_data_in_progress_o = 1'b1;
         miss_state_n = (dma_done_i | transmitter_store_tag_miss_fill_done_i)
-                     //? RECOVER FIXME
-                     ? START //for now we don't need to recover anything after this finishes
-                     : WRITE_FILL_DATA;
+                     //? MHU_RECOVER FIXME
+                     ? MHU_START //for now we don't need to recover anything after this finishes
+                     : MHU_WRITE_FILL_DATA;
         //we update the track bits here cuz for track miss, we can only update them after all the data
         //has been written into DMEM, so any ld before that can know whether the word it's gonna read 
         //is valid or not. If it's valid, then there's no need to allocate a new read miss entry. 
         //If we don't do so, this read miss will use the dma snoop instead, which will lead to a wrong output.
-        //mhu_write_track_v_o = (miss_state_n==RECOVER) & (~store_tag_miss_op_r | mshr_stm_miss_r);
+        //mhu_write_track_v_o = (miss_state_n==MHU_RECOVER) & (~store_tag_miss_op_r | mshr_stm_miss_r);
       end
 
-      STORE_TAG_MISS: begin
-        miss_state_n = (~(stat_info_in.dirty[chosen_way_r] & valid_v_i[chosen_way_r])) //& ~tl_store_on_chosen_way_found_i)
-                         ? WRITE_FILL_DATA 
+      MHU_STORE_TAG_MISS: begin
+        miss_state_n = (~(stat_info.dirty[chosen_way_r] & valid_v_r[chosen_way_r])) //& ~tl_store_on_chosen_way_found_i)
+                         ? MHU_WRITE_FILL_DATA 
                          //: ((~tl_store_on_chosen_way_found_i & ~sbuf_or_tbuf_chosen_way_found_i)
                          : (~sbuf_or_tbuf_chosen_way_found_i
-                           ? SEND_EVICT_ADDR
-                           : WAIT_SNOOP_DONE);
+                           ? MHU_SEND_EVICT_ADDR
+                           : MHU_WAIT_SNOOP_DONE);
 
-        //mhu_write_tag_and_stat_v_o = (miss_state_n == WRITE_FILL_DATA) | (miss_state_n == SEND_EVICT_ADDR);
-        //mhu_read_track_v_o = (miss_state_n == SEND_EVICT_ADDR);  
+        //mhu_write_tag_and_stat_v_o = (miss_state_n == MHU_WRITE_FILL_DATA) | (miss_state_n == MHU_SEND_EVICT_ADDR);
+        //mhu_read_track_v_o = (miss_state_n == MHU_SEND_EVICT_ADDR);  
         mhu_req_busy_o = 1'b1; 
-        tag_mem_tag_way_picked_n = tag_v_i[chosen_way_r];
-        store_tag_miss_fill_v_o = (miss_state_n==WRITE_FILL_DATA);
-        //mhu_write_track_v_o = (miss_state_n==WRITE_FILL_DATA);
+        store_tag_miss_fill_v_o = (miss_state_n==MHU_WRITE_FILL_DATA);
+        //mhu_write_track_v_o = (miss_state_n==MHU_WRITE_FILL_DATA);
       end
 
       // Spend one cycle to recover the tl stage.
       // By recovering, it means re-reading the mshr_cam, data_mem, tag_mem and track_mem for the tl stage.
-      // RECOVER: begin
+      // MHU_RECOVER: begin
       //   recover_o = 1'b1;
-      //   miss_state_n = recover_ack_i ? START : RECOVER;
+      //   miss_state_n = recover_ack_i ? MHU_START : MHU_RECOVER;
       //   //mhu_done = recover_ack_i;
       // end
 
       // this should never happen, but if it does, go back to START;
       default: begin
-        miss_state_n = START;
+        miss_state_n = MHU_START;
       end
 
     endcase

@@ -52,10 +52,10 @@ module bsg_cache_nb_mshr_cam
   logic [safe_els_lp-1:0] mshr_id_decode;
   logic [safe_els_lp-1:0] mem_r_v_li;
 
-  assign mem_r_v_li = r_by_tag_v_i 
-                    ? tag_r_match_lo 
-                    : (r_by_mshr_id_v_i 
-                      ? mshr_id_decode 
+  assign mem_r_v_li = r_by_mshr_id_v_i
+                    ? mshr_id_decode  
+                    : ( r_by_tag_v_i 
+                      ? tag_r_match_lo
                       : '0);
   
   bsg_decode #(

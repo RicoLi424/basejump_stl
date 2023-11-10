@@ -23,6 +23,7 @@ module bsg_cache_nb_read_miss_queue
    , parameter total_els_p = safe_mshr_els_lp*safe_read_miss_els_per_mshr_lp
 
    , parameter lg_total_els_lp = `BSG_SAFE_CLOG2(total_els_p)
+   , parameter mem_width_lp = src_id_width_p+lg_block_size_in_words_lp+byte_sel_width_lp+data_mask_width_lp+word_width_p+data_mask_width_lp+2+1+1
    )
   (input clk_i
    , input reset_i
@@ -80,26 +81,45 @@ module bsg_cache_nb_read_miss_queue
   // Read pointer will be set back to 0 when all the read misses in this field are served, along with write counter
   logic [safe_mshr_els_lp-1:0][`BSG_WIDTH(read_miss_els_per_mshr_p)-1:0] r_counter_r;
   logic r_counter_en_li;
-  logic read_mem_v_li;
+  logic read_mem_v_li, read_mem_v_r;
+  logic [`BSG_SAFE_MINUS(src_id_width_p, 1):0] src_id_r, src_id_lo;
+  logic [lg_block_size_in_words_lp-1:0] word_offset_r, word_offset_lo;
+  logic mask_op_r, mask_op_lo;
+  logic [data_mask_width_lp-1:0] mask_r, mask_lo;
+  logic [1:0] size_op_r, size_op_lo;
+  logic sigext_op_r, sigext_op_lo;
+  logic [byte_sel_width_lp-1:0] byte_sel_r, byte_sel_lo;
+  logic [word_width_p-1:0] mshr_data_r, mshr_data_lo;
+  logic [data_mask_width_lp-1:0] mshr_data_mask_r, mshr_data_mask_lo;  
   
   logic [lg_total_els_lp-1:0] mem_addr_li;
   assign mem_addr_li = mshr_id_i * safe_read_miss_els_per_mshr_lp
                        + (write_not_read_i ? w_counter_r[mshr_id_i][0+:lg_read_miss_els_per_mshr_lp] 
                          : r_counter_r[mshr_id_i][0+:lg_read_miss_els_per_mshr_lp]);
 
-  logic [safe_mshr_els_lp-1:0] read_miss_field_match;
+
+  logic [lg_mshr_els_lp-1:0] mshr_id_r;
+
+  bsg_dff_reset_en_bypass #(
+    .width_p(lg_mshr_els_lp)
+  ) transmitter_refill_done_dff_bypass (
+    .clk_i(clk_i)
+    ,.reset_i(reset_i)
+    ,.en_i(v_i & ~write_not_read_i)
+    ,.data_i(mshr_id_i)
+    ,.data_o(mshr_id_r)
+  );
 
   for(genvar i=0; i<safe_mshr_els_lp; i++) 
     begin : counter
-      assign read_miss_field_match[i] = (mshr_id_i == i);
 
       bsg_counter_set_en #(
         .max_val_p(safe_read_miss_els_per_mshr_lp)
       ) w_counter (
         .clk_i(clk_i)
         ,.reset_i(reset_i)
-        ,.set_i(read_miss_field_match[i] & read_done_o)
-        ,.en_i(v_i & read_miss_field_match[i] & write_not_read_i)
+        ,.set_i((mshr_id_r==i) & read_done_o)
+        ,.en_i(v_i & write_not_read_i & (mshr_id_i==i))
         ,.val_i('0)
         ,.count_o(w_counter_r[i])
       );
@@ -109,8 +129,8 @@ module bsg_cache_nb_read_miss_queue
       ) r_counter (
         .clk_i(clk_i)
         ,.reset_i(reset_i)
-        ,.set_i(read_miss_field_match[i] & read_done_o)
-        ,.en_i(read_miss_field_match[i] & r_counter_en_li)
+        ,.set_i((mshr_id_r==i) & read_done_o)
+        ,.en_i((mshr_id_r==i) & r_counter_en_li)
         ,.val_i('0)
         ,.count_o(r_counter_r[i])
       );
@@ -128,7 +148,7 @@ module bsg_cache_nb_read_miss_queue
     ,.els_p(safe_mshr_els_lp)
   ) r_counter_mux (
     .data_i(r_counter_r)
-    ,.sel_i(mshr_id_i)
+    ,.sel_i(mshr_id_r)
     ,.data_o(target_r_counter)
   );
 
@@ -137,7 +157,7 @@ module bsg_cache_nb_read_miss_queue
     ,.els_p(safe_mshr_els_lp)
   ) w_counter_mux (
     .data_i(w_counter_r)
-    ,.sel_i(mshr_id_i)
+    ,.sel_i(mshr_id_r)
     ,.data_o(target_w_counter)
   );
 
@@ -184,8 +204,38 @@ module bsg_cache_nb_read_miss_queue
   always_ff @ (posedge clk_i) begin
     if (reset_i) begin
       serve_state_r <= IDLE;
+      read_mem_v_r <= 1'b0;
+      {src_id_r,
+      word_offset_r,
+      byte_sel_r,
+      mask_r,
+      mshr_data_r,
+      mshr_data_mask_r,
+      size_op_r,
+      sigext_op_r,
+      mask_op_r} <= '0;
     end else begin
       serve_state_r <= serve_state_n;
+      read_mem_v_r <= ~write_not_read_i & read_mem_v_li;
+      if(read_mem_v_r) begin 
+        {src_id_r,
+        word_offset_r,
+        byte_sel_r,
+        mask_r,
+        mshr_data_r,
+        mshr_data_mask_r,
+        size_op_r,
+        sigext_op_r,
+        mask_op_r} <= {src_id_lo,
+                      word_offset_lo,
+                      byte_sel_lo,
+                      mask_lo,
+                      mshr_data_lo,
+                      mshr_data_mask_lo,
+                      size_op_lo,
+                      sigext_op_lo,
+                      mask_op_lo};
+      end
     end
   end
 
@@ -206,7 +256,7 @@ module bsg_cache_nb_read_miss_queue
   else
     begin : nz
       bsg_mem_1rw_sync #(
-        .width_p(src_id_width_p+lg_block_size_in_words_lp+byte_sel_width_lp+data_mask_width_lp+word_width_p+data_mask_width_lp+2+1+1)
+        .width_p(mem_width_lp)
         ,.els_p(total_els_p)
       ) read_miss_mem (
         .clk_i(clk_i)
@@ -215,12 +265,20 @@ module bsg_cache_nb_read_miss_queue
         ,.addr_i(mem_addr_li)
         ,.v_i(write_not_read_i ? v_i : read_mem_v_li)
         ,.w_i(write_not_read_i)
-        ,.data_o({src_id_o,word_offset_o,byte_sel_o,mask_o,mshr_data_o,mshr_data_mask_o,size_op_o,sigext_op_o,mask_op_o})
+        ,.data_o({src_id_lo,word_offset_lo,byte_sel_lo,mask_lo,mshr_data_lo,mshr_data_mask_lo,size_op_lo,sigext_op_lo,mask_op_lo})
       );
     end
 
+  assign {src_id_o, word_offset_o, byte_sel_o, mask_o, mshr_data_o, mshr_data_mask_o, size_op_o, sigext_op_o, mask_op_o} = 
+         read_mem_v_r 
+         ? {src_id_lo, word_offset_lo, byte_sel_lo, mask_lo, mshr_data_lo, mshr_data_mask_lo, size_op_lo, sigext_op_lo, mask_op_lo}
+         : {src_id_r, word_offset_r, byte_sel_r, mask_r, mshr_data_r, mshr_data_mask_r, size_op_r, sigext_op_r, mask_op_r};
+
+
   //synopsys translate_off
   always_ff @(negedge clk_i) begin
+    // $display("read_done_o:%d, target_r_counter:%d, target_w_counter:%d, yumi_i:%d, serve_state_n:%d, serve_state_r:%d, write_not_read_i:%d", 
+              // read_done_o, target_r_counter, target_w_counter, yumi_i, serve_state_n, serve_state_r, write_not_read_i);
     assert(reset_i || ~v_i || write_not_read_i || v_o[mshr_id_i])
       else $error("No entries in read miss field %d while a read opeartion is being tried", mshr_id_i);      	
   end 

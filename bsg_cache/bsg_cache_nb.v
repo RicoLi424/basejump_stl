@@ -89,14 +89,12 @@ module bsg_cache_nb
   localparam safe_read_miss_els_per_mshr_lp = `BSG_MAX(read_miss_els_per_mshr_p,1);
 
   localparam lg_burst_size_in_words_lp=`BSG_SAFE_CLOG2(burst_size_in_words_lp);
-  localparam num_of_burst_lp=(block_size_in_words_p*word_width_p/dma_data_width_p);
-  localparam lg_num_of_burst_lp=`BSG_SAFE_CLOG2(num_of_burst_lp);
+  localparam block_size_in_bursts_lp=(block_size_in_words_p*word_width_p/dma_data_width_p);
+  localparam lg_block_size_in_bursts_lp=`BSG_SAFE_CLOG2(block_size_in_bursts_lp);
   localparam dma_data_mask_width_lp=(dma_data_width_p>>3);
-  localparam data_mem_els_lp = sets_p*num_of_burst_lp;
-  localparam lg_data_mem_els_lp = `BSG_SAFE_CLOG2(data_mem_els_lp);
   localparam data_bank_els_lp=(sets_p*num_of_burst_per_bank_lp);
   localparam lg_data_bank_els_lp=`BSG_SAFE_CLOG2(data_bank_els_lp);
-  localparam sbuf_data_mem_addr_offset_lp=(num_of_burst_lp == block_size_in_words_p) ? lg_block_size_in_words_lp+$clog2(sets_p) : lg_num_of_burst_lp+$clog2(sets_p); 
+  localparam sbuf_data_mem_addr_offset_lp=(block_size_in_bursts_lp == block_size_in_words_p) ? lg_block_size_in_words_lp+$clog2(sets_p) : lg_block_size_in_bursts_lp+$clog2(sets_p); 
 
   localparam evict_fifo_info_width_lp = `bsg_cache_nb_evict_fifo_entry_width(ways_p, sets_p, mshr_els_p);
   localparam store_tag_miss_fifo_info_width_lp = `bsg_cache_nb_store_tag_miss_fifo_entry_width(ways_p, sets_p, mshr_els_p, word_width_p, block_size_in_words_p);
@@ -105,6 +103,7 @@ module bsg_cache_nb
   //
   logic [lg_ways_lp-1:0] addr_way;
   logic [lg_sets_lp-1:0] addr_index;
+  logic [lg_block_size_in_words_lp-1:0] addr_block_offset;
 
   `declare_bsg_cache_nb_pkt_s(addr_width_p, word_width_p, src_id_width_p);
   bsg_cache_nb_pkt_s cache_pkt;
@@ -121,8 +120,8 @@ module bsg_cache_nb
   //////////////////////
   // TAG LOOKUP STAGE //
   //////////////////////
-  logic tl_we;
-  logic tl_recover;
+  logic tl_we, tl_we_or_recover_r;
+  logic tl_recover_tag_and_track, tl_recover_data;
   logic v_tl_r;
   bsg_cache_nb_decode_s decode_tl_r;
   logic [data_mask_width_lp-1:0] mask_tl_r;
@@ -131,6 +130,7 @@ module bsg_cache_nb
   logic [src_id_width_p-1:0] src_id_tl_r;
   logic sbuf_hazard;
   logic [lg_sets_lp-1:0] addr_index_tl;
+  logic [lg_block_size_in_words_lp-1:0] addr_block_offset_tl;
   logic ld_dma_or_trans_hit_and_word_written_tl_r;
 
   // TAG MEM
@@ -163,7 +163,12 @@ module bsg_cache_nb
   logic [ways_p-1:0][dma_data_mask_width_lp-1:0] data_mem_odd_bank_w_mask_li;
   logic [ways_p-1:0][dma_data_width_p-1:0] data_mem_odd_bank_data_lo;
 
+  logic [ways_p-1:0][dma_data_width_p-1:0] data_mem_data_tl_bank_picked_n;
+  logic [ways_p-1:0][dma_data_width_p-1:0] data_mem_data_tl_bank_picked_r;
   logic [ways_p-1:0][dma_data_width_p-1:0] data_mem_data_tl_bank_picked;
+
+  logic [ways_p-1:0][dma_data_width_p-1:0] ld_snoop_word_tl_expanded;
+
 
   // TRACK MEM
   logic track_mem_v_li;
@@ -193,19 +198,21 @@ module bsg_cache_nb
   logic [ways_p-1:0][dma_data_width_p-1:0] ld_data_v_r;
   logic [ways_p-1:0][block_size_in_words_p-1:0] track_data_v_r;
   logic return_val_op_v;
+  logic mgmt_v;
   logic ld_dma_or_trans_hit_and_word_written_v_r;
 
   logic [tag_width_lp-1:0] addr_tag_v;
   logic [lg_sets_lp-1:0] addr_index_v;
   logic [lg_ways_lp-1:0] addr_way_v;
+  logic [ways_p-1:0] addr_way_v_decode;
   logic [lg_block_size_in_words_lp-1:0] addr_block_offset_v;
   logic [lg_data_mask_width_lp-1:0] addr_byte_sel_v;
   logic [ways_p-1:0] tag_hit_v;
   logic [lg_ways_lp-1:0] tag_hit_way_id_v;
   logic tag_hit_found_v;
 
-  logic [block_size_in_words_p-1:0] block_offset_decode;
-  logic [block_data_mask_width_lp-1:0] block_offset_decode_expand_mask;
+  logic [block_size_in_words_p-1:0] block_offset_decode_v;
+  logic [block_data_mask_width_lp-1:0] block_offset_decode_v_expand_mask;
 
   logic bypass_track_lo;
 
@@ -218,18 +225,11 @@ module bsg_cache_nb
   bsg_cache_nb_stat_info_s stat_mem_w_mask_li;
   bsg_cache_nb_stat_info_s stat_mem_data_lo;
 
-  // Alloc MSHR Entry
-  typedef enum logic [1:0] {
-    IDLE
-    ,WRITE_TAG_AND_STAT
-    ,RECOVER
-    ,DONE
-  } alloc_mshr_state_e;
-
   alloc_mshr_state_e alloc_mshr_state_n;
   alloc_mshr_state_e alloc_mshr_state_r;
-  logic alloc_read_stat_v, alloc_write_tag_and_stat_v, alloc_recover_v, 
+  logic alloc_read_stat_v, alloc_write_tag_and_stat_v, alloc_recover_tag_and_track_v, 
         alloc_in_progress_v, alloc_done_v, alloc_no_available_way_v;
+  logic alloc_sbuf_yumi_v_n, alloc_sbuf_yumi_v_r, alloc_recover_data_v;
 
   bsg_cache_nb_tag_info_s [ways_p-1:0] alloc_tag_mem_data, alloc_tag_mem_mask;
   bsg_cache_nb_stat_info_s alloc_stat_mem_data, alloc_stat_mem_mask;
@@ -253,7 +253,7 @@ module bsg_cache_nb
   logic sbuf_bypass_v_li;
   logic [word_width_p-1:0] bypass_data_lo;
   logic [data_mask_width_lp-1:0] bypass_mask_lo;
-  logic sbuf_full_lo;
+  logic sbuf_empty_lo, sbuf_full_lo;
 
   logic [addr_width_p-1:0] sbuf_el0_addr_snoop_lo;
   logic [lg_ways_lp-1:0] sbuf_el0_way_snoop_lo;
@@ -270,7 +270,7 @@ module bsg_cache_nb
 
   logic [ways_p-1:0][dma_data_mask_width_lp-1:0] sbuf_data_mem_w_mask;
   logic [ways_p-1:0][dma_data_width_p-1:0] sbuf_data_mem_data;
-  logic [lg_data_mem_els_lp-1:0] sbuf_data_mem_addr;
+  logic [lg_data_bank_els_lp-1:0] sbuf_data_mem_addr;
 
   logic [data_sel_mux_els_lp-1:0][word_width_p-1:0] sbuf_data_in_mux_li;
   logic [data_sel_mux_els_lp-1:0][data_mask_width_lp-1:0] sbuf_mask_in_mux_li;
@@ -297,7 +297,7 @@ module bsg_cache_nb
 
   logic [addr_width_p-1:0] tbuf_bypass_addr_li;
   logic tbuf_bypass_v_li;
-  logic tbuf_full_lo;
+  logic tbuf_empty_lo, tbuf_full_lo;
 
   logic [addr_width_p-1:0] tbuf_el0_addr_snoop_lo;
   logic [lg_ways_lp-1:0] tbuf_el0_way_snoop_lo;
@@ -338,7 +338,7 @@ module bsg_cache_nb
 
   logic [safe_mshr_els_lp-1:0][`BSG_SAFE_MINUS(block_size_in_words_p,1):0] mhu_track_data_way_picked_lo;
   logic [safe_mshr_els_lp-1:0] mhu_evict_v_lo, mhu_store_tag_miss_fill_v_lo;
-  logic [safe_mshr_els_lp-1:0] mhu_write_fill_data_in_progress_lo;
+  logic [safe_mshr_els_lp-1:0] mhu_evict_enqueued_lo, mhu_write_fill_data_in_progress_lo;
   logic [safe_mshr_els_lp-1:0] mhu_req_busy_lo;
 
   logic [lg_sets_lp-1:0] way_chooser_addr_index_li; 
@@ -347,14 +347,14 @@ module bsg_cache_nb
   logic [ways_p-1:0] alloc_chosen_way_decode;
   logic [ways_p-1:0] mhu_chosen_way_decode;
 
+  logic [lg_mshr_els_lp-1:0] mhu_req_busy_id;
+  logic mhu_req_busy_found;
   logic [lg_mshr_els_lp-1:0] mhu_evict_mshr_id;
   logic mhu_evict_v_o_found;
   logic [lg_mshr_els_lp-1:0] mhu_store_tag_miss_mshr_id;
   logic mhu_store_tag_miss_v_o_found;
   logic [lg_mshr_els_lp-1:0] mshr_clear_id;
   logic mshr_clear;
-  logic [lg_mshr_els_lp-1:0] mhu_req_mshr_id;
-  logic mhu_req_exist;
 
   logic mhu_req_ready;
   ////////////////////////
@@ -431,7 +431,9 @@ module bsg_cache_nb
   logic [`BSG_SAFE_MINUS(mshr_els_p,1):0] dma_mhu_done_lo;
   logic dma_mgmt_done_lo;
 
-  logic [`BSG_WIDTH(num_of_burst_lp)-1:0] dma_refill_data_in_counter_lo;
+  logic [`BSG_WIDTH(block_size_in_bursts_lp)-1:0] dma_refill_data_in_counter_lo;
+
+  logic [word_width_p-1:0] dma_snoop_data_combined_to_tl_lo; 
 
   logic [word_width_p-1:0] dma_snoop_word_lo;
   logic dma_serve_read_miss_queue_v_lo;
@@ -452,7 +454,7 @@ module bsg_cache_nb
   logic [lg_sets_lp-1:0] dma_refill_addr_index_lo;
   logic [block_data_mask_width_lp-1:0] dma_refill_mshr_data_byte_mask_lo;
 
-  logic [`BSG_WIDTH(num_of_burst_lp)-1:0] dma_refill_data_out_to_sipo_counter_lo;
+  logic [`BSG_WIDTH(block_size_in_bursts_lp)-1:0] dma_refill_data_out_to_sipo_counter_lo;
   logic dma_refill_data_in_done_lo, dma_refill_in_progress_lo;
   logic dma_transmitter_refill_done_lo;
 
@@ -596,41 +598,46 @@ module bsg_cache_nb
   wire ld_even_bank = (v_i & (decode.ld_op | decode.atomic_op) & addr_block_offset % 2 == 0);
   wire ld_odd_bank = (v_i & (decode.ld_op | decode.atomic_op) & addr_block_offset % 2 != 0);
 
+  wire ld_even_bank_tl = (v_tl_r & (decode_tl_r.ld_op | decode_tl_r.atomic_op) & addr_block_offset_tl % 2 == 0);
+  wire ld_odd_bank_tl = (v_tl_r & (decode_tl_r.ld_op | decode_tl_r.atomic_op) & addr_block_offset_tl % 2 != 0);
+
   wire next_access_even_bank = (sbuf_v_lo & sbuf_yumi_li & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp] % 2 == 0))
-                             | ld_even_bank;
+                             | (ld_even_bank & yumi_o) ;
 
   wire next_access_odd_bank = (sbuf_v_lo & sbuf_yumi_li & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp] % 2 != 0))
-                            | ld_odd_bank;
+                            | (ld_odd_bank & yumi_o) ;
 
-  wire even_bank_conflict = transmitter_even_fifo_priority_lo 
-                          & (ld_even_bank | (v_i & decode.st_op & sbuf_v_lo & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp] % 2 == 0)));
-  wire odd_bank_conflict = transmitter_odd_fifo_priority_lo 
-                         & (ld_odd_bank | (v_i & decode.st_op & sbuf_v_lo & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp] % 2 != 0)));
+  // TODO
+  wire ld_even_bank_conflict = transmitter_even_fifo_priority_lo 
+                             & ld_even_bank;
+  wire ld_odd_bank_conflict = transmitter_odd_fifo_priority_lo 
+                            & ld_odd_bank;
 
   wire ld_dma_hit = decode.ld_op 
-                       & (dma_refill_data_in_done_lo 
-                         & (dma_refill_addr_index_lo==addr_index)
-                         & (mhu_curr_addr_tag_lo[dma_refill_mshr_id_lo]==cache_pkt.addr[way_offset_width_lp+:tag_width_lp]));
+                  & ~mgmt_v
+                  & ((dma_refill_data_in_counter_lo >= ((burst_size_in_words_lp==1) ? addr_block_offset : addr_block_offset[lg_burst_size_in_words_lp+:lg_block_size_in_bursts_lp]) + 1) 
+                    & (dma_refill_addr_index_lo==addr_index)
+                    & (mhu_curr_addr_tag_lo[dma_refill_mshr_id_lo]==cache_pkt.addr[way_offset_width_lp+:tag_width_lp]));
 
   wire ld_trans_hit = decode.ld_op
-                         & (transmitter_store_tag_miss_fill_in_progress_lo
-                           & (mhu_curr_addr_tag_lo[transmitter_mshr_id_lo]==cache_pkt.addr[way_offset_width_lp+:tag_width_lp])
-                           & (transmitter_current_addr_index_lo==addr_index));
+                    & (transmitter_store_tag_miss_fill_in_progress_lo
+                      & (mhu_curr_addr_tag_lo[transmitter_mshr_id_lo]==cache_pkt.addr[way_offset_width_lp+:tag_width_lp])
+                      & (transmitter_current_addr_index_lo==addr_index));
 
   wire ld_dma_or_trans_hit_and_word_written = ( ld_dma_hit
-                                                   & (dma_transmitter_refill_done_lo 
-                                                      || (transmitter_refill_in_progress_lo 
-                                                          && ((addr_block_offset % 2 == 0 && transmitter_even_counter_lo >= (addr_block_offset / (2 * burst_size_in_words_lp)) + 1) 
-                                                             ||(addr_block_offset % 2 != 0 && transmitter_odd_counter_lo >= (addr_block_offset / (2 * burst_size_in_words_lp)) + 1)
-                                                             )
-                                                          )))
-                                                    | (ld_trans_hit
-                                                          & (transmitter_mhu_store_tag_miss_fill_done_lo[transmitter_mshr_id_lo]
-                                                            || (transmitter_store_tag_miss_fill_in_progress_lo
-                                                               && ((addr_block_offset % 2 == 0 && transmitter_even_counter_lo >= (addr_block_offset / (2 * burst_size_in_words_lp)) + 1) 
-                                                                  ||(addr_block_offset % 2 != 0 && transmitter_odd_counter_lo >= (addr_block_offset / (2 * burst_size_in_words_lp)) + 1)
-                                                                  )
-                                                          )));
+                                            & (dma_transmitter_refill_done_lo 
+                                              || (transmitter_refill_in_progress_lo 
+                                                  && ((addr_block_offset % 2 == 0 && transmitter_even_counter_lo >= (addr_block_offset / (2 * burst_size_in_words_lp)) + 1) 
+                                                      ||(addr_block_offset % 2 != 0 && transmitter_odd_counter_lo >= (addr_block_offset / (2 * burst_size_in_words_lp)) + 1)
+                                                      )
+                                                  )))
+                                            | (ld_trans_hit
+                                                  & (transmitter_mhu_store_tag_miss_fill_done_lo[transmitter_mshr_id_lo]
+                                                    || (transmitter_store_tag_miss_fill_in_progress_lo
+                                                      && ((addr_block_offset % 2 == 0 && transmitter_even_counter_lo >= (addr_block_offset / (2 * burst_size_in_words_lp)) + 1) 
+                                                          ||(addr_block_offset % 2 != 0 && transmitter_odd_counter_lo >= (addr_block_offset / (2 * burst_size_in_words_lp)) + 1)
+                                                          )
+                                                  )));
 
   if (num_of_burst_per_bank_lp == 1) begin
     assign ld_data_mem_addr = addr_index;
@@ -639,7 +646,7 @@ module bsg_cache_nb
     assign ld_data_mem_addr = {{(sets_p>1){addr_index}}, cache_pkt.addr[(lg_data_mask_width_lp+1)+:(lg_block_size_in_words_lp-1)]};
   end
   else begin
-    assign ld_data_mem_addr = {addr_index, cache_pkt.addr[(lg_data_mask_width_lp+lg_burst_size_in_words_lp+1)+:(lg_num_of_burst_lp-1)]};
+    assign ld_data_mem_addr = {addr_index, cache_pkt.addr[(lg_data_mask_width_lp+lg_burst_size_in_words_lp+1)+:(lg_block_size_in_bursts_lp-1)]};
   end
 
 
@@ -647,9 +654,22 @@ module bsg_cache_nb
   /*************************************** LOOKUP ********************************************/
   /*************************************** STAGE *********************************************/
 
+  // TODO: add store tag miss case
+  wire ld_dma_hit_tl = decode_tl_r.ld_op 
+                     & ~mgmt_v
+                     & ((dma_refill_data_in_counter_lo >= ((burst_size_in_words_lp==1) ? addr_block_offset_tl : addr_block_offset_tl[lg_burst_size_in_words_lp+:lg_block_size_in_bursts_lp]) + 1) 
+                       & (dma_refill_addr_index_lo==addr_index_tl)
+                       & (mhu_curr_addr_tag_lo[dma_refill_mshr_id_lo]==addr_tl_r[way_offset_width_lp+:tag_width_lp]));
+
+  logic use_dma_snoop_data_tl_r;
+  logic [word_width_p-1:0] ld_snoop_word_tl_r;
+
   always_ff @ (posedge clk_i) begin
+    tl_we_or_recover_r <= (tl_we | tl_recover_data);
     if (reset_i) begin
       v_tl_r <= 1'b0;
+      use_dma_snoop_data_tl_r <= 1'b0;
+      ld_snoop_word_tl_r <= '0;
       {mask_tl_r
       ,addr_tl_r
       ,data_tl_r
@@ -660,6 +680,7 @@ module bsg_cache_nb
     else begin
       if (tl_we) begin
         v_tl_r <= v_i;
+        use_dma_snoop_data_tl_r <= 1'b0;
         if (v_i) begin
           mask_tl_r <= cache_pkt.mask;
           addr_tl_r <= cache_pkt.addr;
@@ -672,13 +693,22 @@ module bsg_cache_nb
       else begin
         if (v_we) begin
           v_tl_r <= 1'b0;
+          use_dma_snoop_data_tl_r <= 1'b0;
+        end
+        else if (v_tl_r & ~ld_dma_or_trans_hit_and_word_written_tl_r & ld_dma_hit_tl) begin
+          use_dma_snoop_data_tl_r <= 1'b1;
+          ld_snoop_word_tl_r <= dma_snoop_data_combined_to_tl_lo;
         end
       end
+
+      if (tl_we_or_recover_r) data_mem_data_tl_bank_picked_r <= data_mem_data_tl_bank_picked_n;
     end
   end
 
   assign addr_index_tl =
     addr_tl_r[block_offset_width_lp+:lg_sets_lp];
+  assign addr_block_offset_tl =
+    addr_tl_r[lg_data_mask_width_lp+:lg_block_size_in_words_lp];
 
   // tag_mem
   //
@@ -702,16 +732,20 @@ module bsg_cache_nb
     assign tag_tl[i] = tag_mem_data_lo[i].tag;
     assign lock_tl[i] = tag_mem_data_lo[i].lock;
   end
+
+  for (genvar i = 0; i < ways_p; i++) begin: tl_snoop_expand_gen
+    assign ld_snoop_word_tl_expanded[i] = {burst_size_in_words_lp{ld_snoop_word_tl_r}};
+  end 
  
-  // if (num_of_burst_per_bank_lp == 1) begin
-  //   assign recover_data_mem_addr = addr_index_tl;
-  // end
-  // else if (num_of_burst_per_bank_lp == num_of_words_per_bank_lp) begin
-  //   assign recover_data_mem_addr = {{(sets_p>1){addr_index_tl}}, addr_tl_r[(lg_data_mask_width_lp+1)+:(lg_block_size_in_words_lp-1)]};
-  // end
-  // else begin
-  //   assign recover_data_mem_addr = {addr_index_tl, addr_tl_r[(lg_data_mask_width_lp+lg_burst_size_in_words_lp+1)+:(lg_num_of_burst_lp-1)]};
-  // end
+  if (num_of_burst_per_bank_lp == 1) begin
+    assign recover_data_mem_addr = addr_index_tl;
+  end
+  else if (num_of_burst_per_bank_lp == num_of_words_per_bank_lp) begin
+    assign recover_data_mem_addr = {{(sets_p>1){addr_index_tl}}, addr_tl_r[(lg_data_mask_width_lp+1)+:(lg_block_size_in_words_lp-1)]};
+  end
+  else begin
+    assign recover_data_mem_addr = {addr_index_tl, addr_tl_r[(lg_data_mask_width_lp+lg_burst_size_in_words_lp+1)+:(lg_block_size_in_bursts_lp-1)]};
+  end
 
   // data_mem
   //
@@ -745,9 +779,13 @@ module bsg_cache_nb
     ,.data_o(data_mem_odd_bank_data_lo)
   );
 
-  assign data_mem_data_tl_bank_picked = ((addr_tl_r[lg_data_mask_width_lp+:lg_block_size_in_words_lp])%2 == 0)
-                                      ? data_mem_even_bank_data_lo
-                                      : data_mem_odd_bank_data_lo;      
+  assign data_mem_data_tl_bank_picked_n = (addr_block_offset_tl%2 == 0)
+                                        ? data_mem_even_bank_data_lo
+                                        : data_mem_odd_bank_data_lo;   
+  // This is for the cases where v_we=0 so tl_stage is stalled there, and during that period
+  // transmitter reads the bank to evict data, so in that case the output of bank will be changed
+  // so we gotta do a bypass store after we get it
+  assign data_mem_data_tl_bank_picked = tl_we_or_recover_r ? data_mem_data_tl_bank_picked_n : data_mem_data_tl_bank_picked_r;
 
   // track_mem
   //
@@ -809,13 +847,15 @@ module bsg_cache_nb
           valid_v_r <= valid_tl;
           tag_v_r <= tag_tl;
           lock_v_r <= lock_tl;
-          ld_data_v_r <= data_mem_data_tl_bank_picked;
+          ld_data_v_r <= use_dma_snoop_data_tl_r ? ld_snoop_word_tl_expanded : data_mem_data_tl_bank_picked;
           track_data_v_r <= track_mem_data_lo;
           ld_dma_or_trans_hit_and_word_written_v_r <= ld_dma_or_trans_hit_and_word_written_tl_r;
         end
     end
-    else if (v_o & yumi_i & ~dma_serve_read_miss_queue_v_lo) begin
-      v_v_r <= 1'b0;
+    else begin 
+      if (v_o & yumi_i & ~dma_serve_read_miss_queue_v_lo) begin
+        v_v_r <= 1'b0;
+      end
     end
     end
   end
@@ -835,18 +875,25 @@ module bsg_cache_nb
     addr_v_r[0+:lg_data_mask_width_lp];
 
   bsg_decode #(
+    .num_out_p(ways_p)
+  ) addr_way_v_demux (
+    .i(addr_way_v)
+    ,.o(addr_way_v_decode)
+  );
+
+  bsg_decode #(
     .num_out_p(block_size_in_words_p)
   ) block_offset_v_demux (
     .i(addr_block_offset_v)
-    ,.o(block_offset_decode) 
+    ,.o(block_offset_decode_v) 
   );
 
   bsg_expand_bitmask #(
     .in_width_p(block_size_in_words_p)
     ,.expand_p(data_mask_width_lp)
-  ) block_offset_decode_expand (
-    .i(block_offset_decode)
-    ,.o(block_offset_decode_expand_mask)
+  ) block_offset_decode_v_expand (
+    .i(block_offset_decode_v)
+    ,.o(block_offset_decode_v_expand_mask)
   ); 
 
   for (genvar i = 0; i < ways_p; i++) begin: tag_hit_v_bits
@@ -873,7 +920,7 @@ module bsg_cache_nb
                                         : (decode_v_r.data_size_op < lg_data_mask_width_lp));
   
 
-  wire mshr_match_found_v = mshr_cam_r_match_found_lo & mshr_cam_r_by_tag_v_li & ~(alloc_in_progress_v | alloc_recover_v | alloc_done_v);
+  wire mshr_match_found_v = mshr_cam_r_match_found_lo & ~(alloc_in_progress_v | alloc_recover_tag_and_track_v | alloc_done_v);
 
   // Cases where no match is found in MSHR CAM
   wire track_miss_v = v_v_r & (decode_v_r.ld_op | decode_v_r.atomic_op | partial_st_v) & ~mshr_match_found_v 
@@ -898,7 +945,7 @@ module bsg_cache_nb
   // This means the cache line is found in mshr and this cache line is currently under refilling by DMA
   wire found_in_mshr_and_dma_hit_v = mshr_match_found_v
                                    & (decode_v_r.ld_op
-                                      ? dma_refill_data_in_done_lo 
+                                      ? (dma_refill_data_in_counter_lo >= ((burst_size_in_words_lp==1) ? addr_block_offset_v : addr_block_offset_v[lg_burst_size_in_words_lp+:lg_block_size_in_bursts_lp]) + 1) 
                                       : (decode_v_r.st_op 
                                          ? dma_refill_in_progress_lo
                                          : 1'b0
@@ -965,7 +1012,7 @@ module bsg_cache_nb
   // Use the ld data directly as the output word
   // BUG: if in input/tl stage the word has still not been written but in tv it has, then 
   // if we use the ld_data_v, it's actully not the right data
-  // FIXED prolly
+  // FIXED
   wire ld_found_in_mshr_output_ld_data_v = v_v_r & decode_v_r.ld_op
                                              & ld_dma_or_trans_hit_and_word_written_v_r
                                              & (dma_hit_and_word_has_written_to_dmem_v
@@ -975,7 +1022,7 @@ module bsg_cache_nb
   
   // Case3:
   // Use dma snoop data × mshr data × sbuf bypass as the output word
-  wire ld_found_in_mshr_output_dma_snoop_combined_with_mshr_data_and_sbuf_bypass = v_v_r & decode_v_r.ld_op
+  wire ld_found_in_mshr_output_dma_snoop_combined_with_mshr_data_and_sbuf_bypass_v = v_v_r & decode_v_r.ld_op
                                                                                      & dma_hit_and_word_has_written_to_dmem_v
                                                                                      & ~ld_dma_or_trans_hit_and_word_written_v_r
                                                                                      & ~mshr_found_and_hit_in_track_v;
@@ -1031,15 +1078,14 @@ module bsg_cache_nb
                  | decode_tl_r.ainv_op | decode_tl_r.alock_op | decode_tl_r.aunlock_op;
 
   // this is used for mshr's read valid in
-  wire tag_op_v = decode_v_r.taglv_op | decode_v_r.tagla_op | decode_v_r.tagst_op | decode_v_r.tagfl_op | decode_v_r.afl_op 
-                | decode_v_r.aflinv_op | decode_v_r.ainv_op | decode_v_r.alock_op | decode_v_r.aunlock_op | decode_v_r.taglv_op 
-                | decode_v_r.tagla_op | decode_v_r.tagst_op;
+  // wire tag_op_v = decode_v_r.taglv_op | decode_v_r.tagla_op | decode_v_r.tagst_op | decode_v_r.tagfl_op | decode_v_r.afl_op 
+  //               | decode_v_r.aflinv_op | decode_v_r.ainv_op | decode_v_r.alock_op | decode_v_r.aunlock_op | decode_v_r.taglv_op;
 
   wire tagfl_hit_v = decode_v_r.tagfl_op & valid_v_r[addr_way_v];
   wire aflinv_hit_v = (decode_v_r.afl_op | decode_v_r.aflinv_op | decode_v_r.ainv_op) & tag_hit_found_v;
   wire alock_miss_v = decode_v_r.alock_op & (tag_hit_found_v ? ~lock_v_r[tag_hit_way_id_v] : 1'b1);   // either the line is miss, or the line is unlocked.
   wire aunlock_hit_v = decode_v_r.aunlock_op & (tag_hit_found_v ? lock_v_r[tag_hit_way_id_v] : 1'b0); // the line is hit and locked. 
-  wire mgmt_v = (~decode_v_r.tagst_op) & v_v_r 
+  assign mgmt_v = (~decode_v_r.tagst_op) & v_v_r 
               & (tagfl_hit_v | aflinv_hit_v | alock_miss_v | aunlock_hit_v | atom_miss_v);
 
   // ops that return some value other than '0.
@@ -1171,7 +1217,7 @@ module bsg_cache_nb
                          ? mhu_write_fill_data_in_progress_lo & (transmitter_mhu_store_tag_miss_fill_done_lo | dma_mhu_done_lo)
                          : ( alloc_write_tag_and_stat_v
                            ? mshr_entry_allocate_encode_data_lo
-                           : ( st_found_in_mshr_update_mshr_v 
+                           : ((st_found_in_mshr_update_mshr_v & v_o & yumi_i & ~dma_serve_read_miss_queue_v_lo)
                              ? mshr_cam_r_tag_match_lo
                              : '0));
   assign mshr_cam_w_set_not_clear_li = ~mshr_clear;
@@ -1185,7 +1231,7 @@ module bsg_cache_nb
   assign mshr_cam_w_mask_li = mshr_clear 
                             ? {block_data_mask_width_lp{1'b1}} 
                             : ((st_miss_v | st_found_in_mshr_update_mshr_v)
-                               ? (block_offset_decode_expand_mask & (decode_v_r.mask_op ? {block_size_in_words_p{mask_v_r}} : {block_size_in_words_p{sbuf_mask_in}}))
+                               ? (block_offset_decode_v_expand_mask & (decode_v_r.mask_op ? {block_size_in_words_p{mask_v_r}} : {block_size_in_words_p{sbuf_mask_in}}))
                                : '0
                               );
   assign mshr_cam_r_by_mshr_id_v_li = mhu_store_tag_miss_v_o_found | dma_mshr_cam_r_v_lo;
@@ -1194,8 +1240,8 @@ module bsg_cache_nb
                                : (dma_mshr_cam_r_v_lo
                                  ? dma_mshr_id_i
                                  : '0);
-  //assign mshr_cam_r_by_tag_v_li = (v_v_r & ~tag_op_v) & ~mshr_cam_r_by_mshr_id_v_li; FIXME
-  assign mshr_cam_r_by_tag_v_li = (v_v_r & ~tag_op_v & ~decode_v_r.atomic_op) & ~mshr_cam_r_by_mshr_id_v_li;
+  //assign mshr_cam_r_by_tag_v_li = (v_v_r & (decode_v_r.ld_op | decode_v_r.st_op | decode_v_r.atomic_op)); FIXME
+  assign mshr_cam_r_by_tag_v_li = (v_v_r & (decode_v_r.ld_op | decode_v_r.st_op));
   assign mshr_cam_r_tag_li = addr_v_r[block_offset_width_lp+:cache_line_offset_width_lp];
 
   /***** SELECT VALID BITS FOR CURRENT WORD ******/
@@ -1323,6 +1369,8 @@ module bsg_cache_nb
       ,.store_tag_miss_fill_v_o(mhu_store_tag_miss_fill_v_lo[i])
 
       ,.write_fill_data_in_progress_o(mhu_write_fill_data_in_progress_lo[i])
+      ,.evict_enqueued_o(mhu_evict_enqueued_lo[i])
+
       ,.mhu_req_busy_o(mhu_req_busy_lo[i])
     );
   
@@ -1339,30 +1387,39 @@ module bsg_cache_nb
                                      & ~mhu_mshr_stm_miss_lo[alloc_or_update_mshr_id_lo]) // FIXME: this line could prolly be omitted)
                                    & partial_st_v
                                    );
-  assign transmitter_sbuf_or_tbuf_chosen_way_found_li[i] = (~tbuf_empty_lo & 
-                                                            (( tbuf_el0_valid_snoop_lo
-                                                             & tbuf_el0_way_snoop_lo == mhu_chosen_way_lo[i]
-                                                             & tbuf_el0_addr_snoop_lo[block_offset_width_lp+:lg_sets_lp] == mhu_curr_addr_index_lo[i]
-                                                             )
-                                                            |( tbuf_el1_valid_snoop_lo
-                                                             & tbuf_el1_way_snoop_lo == mhu_chosen_way_lo[i]
-                                                             & tbuf_el1_addr_snoop_lo[block_offset_width_lp+:lg_sets_lp] == mhu_curr_addr_index_lo[i]
-                                                             ))
-                                                           ) 
-                                                         | (~sbuf_empty_lo & 
-                                                            (( sbuf_el0_valid_snoop_lo
-                                                             & sbuf_el0_way_snoop_lo == mhu_chosen_way_lo[i]
-                                                             & sbuf_el0_addr_snoop_lo[block_offset_width_lp+:lg_sets_lp] == mhu_curr_addr_index_lo[i]
-                                                             )
-                                                            |( sbuf_el1_valid_snoop_lo
-                                                             & sbuf_el1_way_snoop_lo == mhu_chosen_way_lo[i]
-                                                             & sbuf_el1_addr_snoop_lo[block_offset_width_lp+:lg_sets_lp] == mhu_curr_addr_index_lo[i]
-                                                             ))
+  assign transmitter_sbuf_or_tbuf_chosen_way_found_li[i] = mhu_req_busy_lo[i]
+                                                         & ((~tbuf_empty_lo & 
+                                                             (( tbuf_el0_valid_snoop_lo
+                                                              & tbuf_el0_way_snoop_lo == mhu_chosen_way_lo[i]
+                                                              & tbuf_el0_addr_snoop_lo[block_offset_width_lp+:lg_sets_lp] == mhu_curr_addr_index_lo[i]
+                                                              )
+                                                             |( tbuf_el1_valid_snoop_lo
+                                                              & tbuf_el1_way_snoop_lo == mhu_chosen_way_lo[i]
+                                                              & tbuf_el1_addr_snoop_lo[block_offset_width_lp+:lg_sets_lp] == mhu_curr_addr_index_lo[i]
+                                                              ))) 
+                                                           | (~sbuf_empty_lo & 
+                                                              (( sbuf_el0_valid_snoop_lo
+                                                               & sbuf_el0_way_snoop_lo == mhu_chosen_way_lo[i]
+                                                               & sbuf_el0_addr_snoop_lo[block_offset_width_lp+:lg_sets_lp] == mhu_curr_addr_index_lo[i]
+                                                               )
+                                                              |( sbuf_el1_valid_snoop_lo
+                                                               & sbuf_el1_way_snoop_lo == mhu_chosen_way_lo[i]
+                                                               & sbuf_el1_addr_snoop_lo[block_offset_width_lp+:lg_sets_lp] == mhu_curr_addr_index_lo[i]
+                                                               )))
                                                            );
   
   end                       
 
-  assign mhu_req_ready = ~(|mhu_req_busy_lo);
+  bsg_priority_encode #(
+    .width_p(mshr_els_p)
+    ,.lo_to_hi_p(1)
+  ) mhu_req_busy_encode (
+    .i(mhu_req_busy_lo)
+    ,.addr_o(mhu_req_busy_id)
+    ,.v_o(mhu_req_busy_found)
+  );
+
+  assign mhu_req_ready = ~mhu_req_busy_found;
 
   bsg_priority_encode #(
     .width_p(mshr_els_p)
@@ -1389,15 +1446,6 @@ module bsg_cache_nb
     .i(mhu_write_fill_data_in_progress_lo & (transmitter_mhu_store_tag_miss_fill_done_lo | dma_mhu_done_lo))
     ,.addr_o(mshr_clear_id)
     ,.v_o(mshr_clear)
-  ); 
-
-   bsg_priority_encode #(
-    .width_p(mshr_els_p)
-    ,.lo_to_hi_p(1)
-   ) mhu_req_busy_encode (
-    .i(mhu_req_busy_lo)
-    ,.addr_o(mhu_req_mshr_id)
-    ,.v_o(mhu_req_exist)
   ); 
 
   bsg_decode_with_v #(
@@ -1486,13 +1534,13 @@ module bsg_cache_nb
     ,.read_in_progress_o(read_miss_queue_read_in_progress_lo)
    );   
 
-  assign read_miss_queue_mshr_id_li = dma_serve_read_miss_queue_v_lo
+  assign read_miss_queue_mshr_id_li = (dma_serve_read_miss_queue_v_lo & ~read_miss_queue_read_done_lo)
                                     ? dma_refill_mshr_id_lo
                                     : alloc_or_update_mshr_id_lo;
   assign read_miss_queue_v_li = (dma_serve_read_miss_queue_v_lo & ~read_miss_queue_read_done_lo)
-                              | ((ld_found_in_mshr_alloc_read_miss_entry_v & read_miss_queue_ready_lo[alloc_or_update_mshr_id_lo])
+                              | ((ld_found_in_mshr_alloc_read_miss_entry_v & read_miss_queue_ready_lo[alloc_or_update_mshr_id_lo] & v_o & yumi_i)
                                 |(ld_miss_v & alloc_write_tag_and_stat_v));
-  assign read_miss_queue_write_not_read_li = ~dma_serve_read_miss_queue_v_lo;
+  assign read_miss_queue_write_not_read_li = ~dma_serve_read_miss_queue_v_lo | read_miss_queue_read_done_lo;
 
   /***************** store buffer ********************/
   //
@@ -1580,21 +1628,27 @@ module bsg_cache_nb
                          | st_found_in_mshr_update_sbuf_and_tbuf_v) 
                        )
                      )
-                   & v_o & yumi_i;
-  assign sbuf_entry_li.way_id = tag_hit_way_id_v;
+                   & v_o & yumi_i & ~dma_serve_read_miss_queue_v_lo;
+  assign sbuf_entry_li.way_id = atom_miss_v ? mgmt_curr_way_lo : tag_hit_way_id_v;
   assign sbuf_entry_li.addr = addr_v_r;
   // store buffer can write to dmem when
   // 1) there is valid entry in store buffer.
   // 2) incoming request does not read the bank that sbuf wants to write.
   // 3) there's no conflict with transmitter's priority for even/odd bank.
   // 4) TL read DMEM (and bypass from sbuf), and TV is not stalled (v_we).
+  // 5) the bank it's gonna write to is not going to do recover in next cycle
   assign sbuf_yumi_li = sbuf_v_lo
     & ~(((sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]%2==0 && ld_even_bank)
         | (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]%2!=0 && ld_odd_bank))
         & yumi_o)
-    & ~(v_tl_r & (decode_tl_r.ld_op | decode_tl_r.atomic_op) & (~v_we) & (~(mgmt_v | ld_miss_v | st_miss_v)))
-    & ~(transmitter_even_fifo_priority_lo & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]%2==0))
-    & ~(transmitter_odd_fifo_priority_lo & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]%2!=0)); 
+    //& ~(v_tl_r & (decode_tl_r.ld_op | decode_tl_r.atomic_op) & (~v_we) & (~(mgmt_v | ld_miss_v | st_miss_v)))
+    & ~(v_tl_r & (decode_tl_r.ld_op | decode_tl_r.atomic_op) & (~v_we) & (~(mgmt_v | alloc_sbuf_yumi_v_n)))
+    & ~(ld_even_bank_tl & tl_recover_data & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]%2==0))
+    & ~(ld_odd_bank_tl & tl_recover_data & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]%2!=0))
+    & ~(transmitter_even_fifo_priority_lo & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]%2==0) 
+       & ~(sbuf_full_lo & sbuf_v_li))
+    & ~(transmitter_odd_fifo_priority_lo & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]%2!=0) 
+       & ~(sbuf_full_lo & sbuf_v_li)); 
 
   assign sbuf_bypass_addr_li = addr_tl_r;
   assign sbuf_bypass_v_li = (decode_tl_r.ld_op | decode_tl_r.atomic_op) & v_tl_r & v_we;
@@ -1878,7 +1932,7 @@ module bsg_cache_nb
       snoop_or_ld_data = bypass_data_masked;
     end else if (ld_found_in_mshr_output_dma_snoop_combined_with_mshr_data_v) begin
       snoop_or_ld_data = dma_snoop_data_combined_with_mshr_data;
-    end else if (ld_found_in_mshr_output_dma_snoop_combined_with_mshr_data_and_sbuf_bypass) begin
+    end else if (ld_found_in_mshr_output_dma_snoop_combined_with_mshr_data_and_sbuf_bypass_v) begin
       snoop_or_ld_data = dma_snoop_data_combined_with_mshr_data_bypassed;
     end else if (ld_found_in_mshr_and_hit_in_track_data_v) begin
       snoop_or_ld_data = ld_data_combined_with_mshr_data;
@@ -1888,7 +1942,7 @@ module bsg_cache_nb
       snoop_or_ld_data = bypass_data_masked;
     end
   end
-  
+
 
   bsg_expand_bitmask #(
     .in_width_p(data_mask_width_lp) 
@@ -2017,12 +2071,16 @@ module bsg_cache_nb
     ,.mhu_refill_addr_index_i(dma_refill_addr_index_li)
 
     ,.mhu_write_fill_data_in_progress_i(mhu_write_fill_data_in_progress_lo)
+    ,.mhu_evict_enqueued_i(mhu_evict_enqueued_lo)
     ,.transmitter_mhu_store_tag_miss_done_i(transmitter_mhu_store_tag_miss_fill_done_lo)
     ,.mhu_dma_done_o(dma_mhu_done_lo)
     ,.mgmt_dma_done_o(dma_mgmt_done_lo)
 
     ,.addr_block_offset_v_i(addr_block_offset_v)
     ,.dma_refill_data_in_counter_o(dma_refill_data_in_counter_lo)
+
+    ,.addr_block_offset_tl_i(addr_block_offset_tl)
+    ,.snoop_data_combined_to_tl_o(dma_snoop_data_combined_to_tl_lo)
 
     ,.snoop_word_o(dma_snoop_word_lo)
     ,.serve_read_miss_queue_v_o(dma_serve_read_miss_queue_v_lo)
@@ -2077,12 +2135,15 @@ module bsg_cache_nb
     ,.transmitter_evict_mshr_id_i(transmitter_mshr_id_lo)
   );
 
-  assign dma_cmd_li = mgmt_v ? mgmt_dma_cmd_lo : (mhu_req_exist ? mhu_dma_cmd_lo[mhu_req_mshr_id] : e_dma_nop);
-  assign dma_req_addr_li = mgmt_v ? mgmt_dma_addr_lo : (mhu_req_exist ? mhu_dma_addr_lo[mhu_req_mshr_id] : '0);
-  assign dma_req_mshr_id_li = mhu_req_exist ? mhu_req_mshr_id : '0; 
+  assign dma_cmd_li = mgmt_v ? mgmt_dma_cmd_lo : (mhu_req_busy_found ? mhu_dma_cmd_lo[mhu_req_busy_id] : e_dma_nop);
+  assign dma_req_addr_li = mgmt_v ? mgmt_dma_addr_lo : (mhu_req_busy_found ? mhu_dma_addr_lo[mhu_req_busy_id] : '0);
+  assign dma_req_mshr_id_li = mhu_req_busy_found ? mhu_req_busy_id : '0; 
   assign dma_refill_hold_li = (alloc_in_progress_v & ~alloc_no_available_way_v) 
-                            | (st_found_in_mshr_update_mshr_v & dma_data_v_i & addr_index_v==mhu_curr_addr_index_lo[dma_mshr_id_i])
-                            | (st_found_in_mshr_update_sbuf_and_tbuf_v & ~yumi_i); 
+                            | (st_found_in_mshr_update_mshr_v & ~dma_refill_in_progress_lo & dma_data_v_i & (alloc_or_update_mshr_id_lo==dma_mshr_id_i))
+                            //| (st_found_in_mshr_update_sbuf_and_tbuf_v & ~yumi_i)
+                            | (dma_transmitter_refill_done_lo & ~dma_serve_read_miss_queue_v_lo
+                              & ld_found_in_mshr_output_dma_snoop_combined_with_mshr_data_and_sbuf_bypass_v
+                              & v_o & ~yumi_i); // TODO: transmitter's hold also needs to add ld stm n-yumi case
   assign dma_refill_track_miss_li = dma_refill_in_progress_lo ? mhu_track_miss_lo[dma_refill_mshr_id_lo] : 1'b0;
   assign dma_refill_way_li = dma_refill_in_progress_lo ? mhu_chosen_way_lo[dma_refill_mshr_id_lo] : '0;
   assign dma_refill_addr_index_li = dma_refill_in_progress_lo ? mhu_curr_addr_index_lo[dma_refill_mshr_id_lo] : '0;
@@ -2174,36 +2235,40 @@ module bsg_cache_nb
   assign transmitter_refill_we_li = trans_idle & dma_refill_v_lo & ~transmitter_evict_we_li & ~transmitter_store_tag_miss_we_li;
   assign transmitter_mshr_id_li = transmitter_evict_we_li
                                 ? evict_fifo_entry_lo.mshr_id
-                                : transmitter_store_tag_miss_we_li
+                                : ( transmitter_store_tag_miss_we_li
                                   ? store_tag_miss_fifo_entry_lo.mshr_id
-                                  : transmitter_refill_we_li 
+                                  : ( transmitter_refill_we_li 
                                     ? dma_refill_mshr_id_lo 
-                                    : '0;
+                                    : '0));
 
   assign transmitter_way_li = transmitter_evict_we_li
                             ? evict_fifo_entry_lo.way
-                            : transmitter_store_tag_miss_we_li
+                            : ( transmitter_store_tag_miss_we_li
                               ? store_tag_miss_fifo_entry_lo.way
-                              : transmitter_refill_we_li 
+                              : ( transmitter_refill_we_li 
                                 ? dma_refill_way_lo 
-                                : '0;
+                                : '0));
 
   assign transmitter_addr_index_li = transmitter_evict_we_li
                                    ? evict_fifo_entry_lo.index
-                                   : transmitter_store_tag_miss_we_li
+                                   : ( transmitter_store_tag_miss_we_li
                                      ? store_tag_miss_fifo_entry_lo.index
-                                     : transmitter_refill_we_li 
+                                     : ( transmitter_refill_we_li 
                                        ? dma_refill_addr_index_lo 
-                                       : '0;
+                                       : '0));
 
   assign transmitter_mshr_data_byte_mask_li = transmitter_refill_we_li 
                                             ? dma_refill_mshr_data_byte_mask_lo 
-                                            : transmitter_store_tag_miss_we_li 
+                                            : ( transmitter_store_tag_miss_we_li 
                                               ? store_tag_miss_fifo_entry_lo.mshr_mask
-                                              : '0;
+                                              : '0);
 
-  assign transmitter_even_bank_v_li = ~next_access_even_bank | transmitter_even_fifo_priority_lo; 
-  assign transmitter_odd_bank_v_li = ~next_access_odd_bank | transmitter_odd_fifo_priority_lo; 
+  assign transmitter_even_bank_v_li = (~next_access_even_bank | transmitter_even_fifo_priority_lo) 
+                                    & ~(sbuf_full_lo & sbuf_v_li & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]%2==0)) 
+                                    & ~(ld_even_bank_tl & tl_recover_data); 
+  assign transmitter_odd_bank_v_li = (~next_access_odd_bank | transmitter_odd_fifo_priority_lo) 
+                                   & ~(sbuf_full_lo & sbuf_v_li & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]%2!=0)) 
+                                   & ~(ld_odd_bank_tl & tl_recover_data); 
 
   // evict fifo, input from MHUs, output to transmitter
   bsg_fifo_1r1w_small #(
@@ -2262,21 +2327,34 @@ module bsg_cache_nb
 
   // ctrl logic
   //
-  wire serve_read_queue_output_occupied = dma_serve_read_miss_queue_v_lo & v_v_r & (decode_v_r.ld_op & ~(ld_miss_v & alloc_done_v));
+  // wire serve_read_queue_output_occupied = dma_serve_read_miss_queue_v_lo & v_v_r 
+  //                                       & (decode_v_r.ld_op 
+  //                                         & ~(ld_miss_v & alloc_done_v) 
+  //                                         & ~(ld_found_in_mshr_alloc_read_miss_entry_v & read_miss_queue_ready_lo[alloc_or_update_mshr_id_lo] & read_miss_queue_read_done_lo));
+
+  // FIXME: actually ld in sv stage can still go on when it's in serving read miss queue mode 
+  // as it doesn't need to output data, but in the context of testing, we want to count the number of (v_o & src_id_o!=0) 
+  // to know how many instructions have been successfully completed, in this case, we will also stall ld when serving readq
+  wire serve_read_queue_output_occupied = dma_serve_read_miss_queue_v_lo & v_v_r 
+                                        & ~(ld_miss_v & alloc_done_v) 
+                                        & ~(ld_found_in_mshr_alloc_read_miss_entry_v & read_miss_queue_ready_lo[alloc_or_update_mshr_id_lo] & read_miss_queue_read_done_lo);            
   wire alloc_read_miss_entry_but_no_empty = ld_found_in_mshr_alloc_read_miss_entry_v & ~read_miss_queue_ready_lo[alloc_or_update_mshr_id_lo];
   wire st_found_in_mshr_dma_hit_but_not_written_to_dmem_yet = v_v_r & decode_v_r.st_op
                                                             & mshr_match_found_v
                                                             & ((found_in_mshr_and_dma_hit_v & dma_hit_but_word_not_written_to_dmem_yet_v));
-
-  assign v_o = dma_serve_read_miss_queue_v_lo
-             ? read_miss_queue_read_in_progress_lo
-             : ( v_v_r 
-               & ( mgmt_v
-                 ? mgmt_done_lo
-                 : (( ld_miss_v | st_miss_v )
-                   ? alloc_done_v
-                   : ~( dma_mshr_cam_r_v_lo | alloc_read_miss_entry_but_no_empty | st_found_in_mshr_dma_hit_but_not_written_to_dmem_yet)
-                 ))); 
+  
+  //TODO: Optimization: At the very first begining of dma_serve_read_miss_queue_v_lo sv stage can still output actually
+  assign v_o = ~reset_i &
+             ( dma_serve_read_miss_queue_v_lo
+               ? read_miss_queue_read_in_progress_lo
+               : ( v_v_r 
+                 & ( mgmt_v
+                   ? mgmt_done_lo
+                   : (( ld_miss_v | st_miss_v )
+                     ? alloc_done_v
+                     : ~( dma_mshr_cam_r_v_lo | alloc_read_miss_entry_but_no_empty | st_found_in_mshr_dma_hit_but_not_written_to_dmem_yet
+                        | (st_found_in_mshr_update_mshr_v & mshr_clear))
+                   )))); 
 
   assign v_we = ~(v_tl_r & tag_op_tl & ~(&mshr_cam_w_empty_lo))
               & ( v_v_r
@@ -2290,9 +2368,11 @@ module bsg_cache_nb
   // when the store buffer is full, and the TV stage is inserting another entry,
   // load/atomic cannot enter tl stage.
   assign sbuf_hazard = (sbuf_full_lo & sbuf_v_li)
-    & (v_i & (decode.ld_op | decode.atomic_op));
+                     & ( ((sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]%2==0) & ld_even_bank)
+                       | ((sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]%2!=0) & ld_odd_bank));
 
-  assign tl_recover = mgmt_recover_lo | alloc_recover_v;
+  assign tl_recover_tag_and_track = mgmt_recover_lo | alloc_recover_tag_and_track_v;
+  assign tl_recover_data = mgmt_recover_lo | alloc_recover_data_v;
   // during miss, tl pipeline cannot take next instruction when
   // 1) input is tagst and mshr is not empty or tl/tv is busy and there instruction is not tagst/la/lv
   // 2) mgmt is writing to tag_mem or track_mem
@@ -2303,18 +2383,18 @@ module bsg_cache_nb
   // 7) next instruction is tag mgmt or atomic, and mshr is not empty
   //    or there's chance that instructions in tl/tv will fetch a cache line from next level memory
   wire tl_ready = ~sbuf_hazard
-                & ~tl_recover
+                & ~tl_recover_tag_and_track
                 & ~(decode.tagst_op & v_i & (~(&mshr_cam_w_empty_lo) 
                    | (v_tl_r & ~(decode_tl_r.tagst_op | decode_tl_r.taglv_op | decode_tl_r.tagla_op))
                    | (v_v_r & ~(decode_v_r.tagst_op | decode_v_r.taglv_op | decode_v_r.tagla_op))
                    ))
                 & ~( decode.atomic_op & v_i 
                    & (~(&mshr_cam_w_empty_lo) 
-                     | (v_tl_r & (decode_tl_r.st_op | decode_tl_r.ld_op | decode_tl_r.alock_op | decode_tl_r.atomic_op)) 
-                     | (v_v_r & (ld_miss_v | st_miss_v | alock_miss_v | atom_miss_v))))
+                     | (v_tl_r & (decode_tl_r.st_op | decode_tl_r.ld_op)) 
+                     | (v_v_r & (ld_miss_v | st_miss_v))))
                 & ~(mgmt_v & (mgmt_track_mem_v_lo | mgmt_tag_mem_v_lo))
                 & ~((ld_miss_v | st_miss_v) & alloc_write_tag_and_stat_v)
-                & ~(even_bank_conflict | odd_bank_conflict);
+                & ~(ld_even_bank_conflict | ld_odd_bank_conflict);
 
   assign tl_we =  tl_ready & (v_tl_r ? v_we : 1'b1);
   assign yumi_o = v_i & tl_we;
@@ -2342,7 +2422,7 @@ module bsg_cache_nb
   );
 
   assign tag_mem_v_li = (decode.tag_read_op & yumi_o)
-    | (tl_recover & decode_tl_r.tag_read_op & v_tl_r)
+    | (tl_recover_tag_and_track & decode_tl_r.tag_read_op & v_tl_r)
     | mgmt_tag_mem_v_lo
     | alloc_write_tag_and_stat_v 
     | (decode.tagst_op & yumi_o); 
@@ -2362,7 +2442,7 @@ module bsg_cache_nb
       tag_mem_w_mask_li = mgmt_tag_mem_w_mask_lo;
     end
     else if(ld_miss_v | st_miss_v) begin
-      tag_mem_addr_li = alloc_recover_v
+      tag_mem_addr_li = alloc_recover_tag_and_track_v
         ? addr_index_tl
         : (alloc_write_tag_and_stat_v ? addr_index_v : addr_index);
       tag_mem_data_li = alloc_tag_mem_data;
@@ -2381,13 +2461,13 @@ module bsg_cache_nb
   // data_mem ctrl logic
   //
   assign data_mem_even_bank_v_li = ((yumi_o & ld_even_bank)
-    //| (v_tl_r & tl_recover & (decode_tl_r.ld_op | decode_tl_r.atomic_op)) 
+    | (ld_even_bank_tl & tl_recover_data) 
     | transmitter_even_bank_v_lo
     | (sbuf_v_lo & sbuf_yumi_li & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]%2==0))
   );
 
   assign data_mem_odd_bank_v_li = ((yumi_o & ld_odd_bank)
-    //| (v_tl_r & tl_recover & (decode_tl_r.ld_op | decode_tl_r.atomic_op)) 
+    | (ld_odd_bank_tl & tl_recover_data) 
     | transmitter_odd_bank_v_lo
     | (sbuf_v_lo & sbuf_yumi_li & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]%2!=0))
   );
@@ -2395,31 +2475,35 @@ module bsg_cache_nb
   assign data_mem_even_bank_w_li = (transmitter_even_bank_v_lo & transmitter_even_bank_w_lo) | (sbuf_v_lo & sbuf_yumi_li & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]%2==0));
   assign data_mem_odd_bank_w_li = (transmitter_odd_bank_v_lo & transmitter_odd_bank_w_lo) | (sbuf_v_lo & sbuf_yumi_li & (sbuf_entry_lo.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]%2!=0));
 
-  assign data_mem_even_bank_data_li = transmitter_even_bank_w_lo
+  assign data_mem_even_bank_data_li = (transmitter_even_bank_v_lo & transmitter_even_bank_w_lo)
                                     ? transmitter_even_bank_data_lo
                                     : sbuf_data_mem_data;
 
-  assign data_mem_odd_bank_data_li = transmitter_odd_bank_w_lo
+  assign data_mem_odd_bank_data_li = (transmitter_odd_bank_v_lo & transmitter_odd_bank_w_lo)
                                    ? transmitter_odd_bank_data_lo
                                    : sbuf_data_mem_data;
 
-  assign data_mem_even_bank_addr_li = (transmitter_even_bank_v_lo
-      ? transmitter_even_bank_addr_lo
-      : ((yumi_o & ld_even_bank) 
-        ? ld_data_mem_addr
-        : sbuf_data_mem_addr));
+  assign data_mem_even_bank_addr_li = (ld_even_bank_tl & tl_recover_data)
+                                    ? recover_data_mem_addr
+                                    : (transmitter_even_bank_v_lo
+                                      ? transmitter_even_bank_addr_lo
+                                      : ((yumi_o & ld_even_bank) 
+                                        ? ld_data_mem_addr
+                                        : sbuf_data_mem_addr));
 
-  assign data_mem_odd_bank_addr_li = (transmitter_odd_bank_v_lo
-      ? transmitter_odd_bank_addr_lo
-      : ((yumi_o & ld_odd_bank) 
-        ? ld_data_mem_addr
-        : sbuf_data_mem_addr));
+  assign data_mem_odd_bank_addr_li = (ld_odd_bank_tl & tl_recover_data)
+                                    ? recover_data_mem_addr
+                                    : (transmitter_odd_bank_v_lo
+                                      ? transmitter_odd_bank_addr_lo
+                                      : ((yumi_o & ld_odd_bank) 
+                                        ? ld_data_mem_addr
+                                        : sbuf_data_mem_addr));
 
-  assign data_mem_even_bank_w_mask_li = transmitter_even_bank_w_lo
+  assign data_mem_even_bank_w_mask_li = (transmitter_even_bank_v_lo & transmitter_even_bank_w_lo)
     ? transmitter_even_bank_w_mask_lo
     : sbuf_data_mem_w_mask;
 
-  assign data_mem_odd_bank_w_mask_li = transmitter_odd_bank_w_lo
+  assign data_mem_odd_bank_w_mask_li = (transmitter_odd_bank_v_lo & transmitter_odd_bank_w_lo)
     ? transmitter_odd_bank_w_mask_lo
     : sbuf_data_mem_w_mask;
 
@@ -2434,7 +2518,7 @@ module bsg_cache_nb
   bsg_lru_pseudo_tree_decode #(
     .ways_p(ways_p)
   ) plru_decode (
-    .way_id_i(alloc_write_tag_and_stat_v ? way_chooser_chosen_way_lo : tag_hit_way_id_v)
+    .way_id_i(decode_v_r.tagst_op ? addr_way_v : (alloc_write_tag_and_stat_v ? way_chooser_chosen_way_lo : tag_hit_way_id_v))
     ,.data_o(plru_decode_data_lo)
     ,.mask_o(plru_decode_mask_lo)
   );
@@ -2473,10 +2557,10 @@ module bsg_cache_nb
       if (decode_v_r.tagst_op) begin
         // for TAGST
         stat_mem_data_li.dirty = {ways_p{1'b0}};
-        stat_mem_data_li.lru_bits = {(ways_p-1){1'b0}};
+        stat_mem_data_li.lru_bits = plru_decode_data_lo;
         stat_mem_data_li.waiting_for_fill_data = {ways_p{1'b0}};
-        stat_mem_w_mask_li.dirty = {ways_p{1'b1}};
-        stat_mem_w_mask_li.lru_bits = {(ways_p-1){1'b1}};
+        stat_mem_w_mask_li.dirty = addr_way_v_decode;
+        stat_mem_w_mask_li.lru_bits = plru_decode_mask_lo;
         stat_mem_w_mask_li.waiting_for_fill_data = {ways_p{1'b1}};
       end
       else begin
@@ -2512,16 +2596,19 @@ module bsg_cache_nb
   //
   always_ff @ (posedge clk_i) begin
     if (reset_i) begin
-      alloc_mshr_state_r <= IDLE;
+      alloc_mshr_state_r <= ALLOC_IDLE;
+      alloc_sbuf_yumi_v_r <= '0;
     end else begin
       alloc_mshr_state_r <= alloc_mshr_state_n;
+      alloc_sbuf_yumi_v_r <= alloc_sbuf_yumi_v_n;
     end
   end
+
 
   always_comb begin
     alloc_read_stat_v = 1'b0;
     alloc_write_tag_and_stat_v = 1'b0;
-    alloc_recover_v = 1'b0;
+    alloc_recover_tag_and_track_v = 1'b0;
     alloc_in_progress_v = 1'b0;
     alloc_done_v = 1'b0;
     alloc_no_available_way_v = 1'b0;
@@ -2530,28 +2617,36 @@ module bsg_cache_nb
     alloc_stat_mem_data = '0;
     alloc_stat_mem_mask = '0;
     alloc_mshr_state_n = alloc_mshr_state_r;
+    alloc_sbuf_yumi_v_n = alloc_sbuf_yumi_v_r;
+    alloc_recover_data_v = 1'b0;
 
     case (alloc_mshr_state_r)
 
-      IDLE: begin
+      ALLOC_IDLE: begin
         alloc_mshr_state_n = mshr_entry_alloc_ready
-                           ? WRITE_TAG_AND_STAT 
-                           : IDLE;  
+                           ? ALLOC_WRITE_TAG_AND_STAT 
+                           : ALLOC_IDLE;  
         alloc_read_stat_v = mshr_entry_alloc_ready;                
         alloc_in_progress_v = mshr_entry_alloc_ready;
+        alloc_sbuf_yumi_v_n = ((ld_miss_v | st_miss_v) & ~mshr_entry_alloc_ready & mhu_req_busy_found & transmitter_sbuf_or_tbuf_chosen_way_found_li[mhu_req_busy_id])
+                               ? 1'b1
+                               : alloc_sbuf_yumi_v_r;
       end
 
-      WRITE_TAG_AND_STAT: begin
+      ALLOC_WRITE_TAG_AND_STAT: begin
         alloc_mshr_state_n = way_chooser_no_available_way_lo
-                           ? (dma_mshr_cam_r_v_lo
-                             ? IDLE
-                             : WRITE_TAG_AND_STAT)
-                           : ((dma_serve_read_miss_queue_v_lo & ld_miss_v)
-                             ? WRITE_TAG_AND_STAT 
-                             : RECOVER);
-        alloc_write_tag_and_stat_v = alloc_mshr_state_n==RECOVER;
+                           ? ( mshr_clear
+                             ? ALLOC_IDLE
+                             : ALLOC_WRITE_TAG_AND_STAT)
+                           : ((dma_serve_read_miss_queue_v_lo & ~read_miss_queue_read_done_lo & ld_miss_v)
+                             ? ALLOC_WRITE_TAG_AND_STAT 
+                             : ALLOC_RECOVER);
+        alloc_write_tag_and_stat_v = alloc_mshr_state_n==ALLOC_RECOVER;
         alloc_in_progress_v = 1'b1;
         alloc_no_available_way_v = way_chooser_no_available_way_lo;
+        alloc_sbuf_yumi_v_n = (way_chooser_no_available_way_lo & mhu_req_busy_found & transmitter_sbuf_or_tbuf_chosen_way_found_li[mhu_req_busy_id])
+                            ? 1'b1
+                            : alloc_sbuf_yumi_v_r;
 
         for (integer i = 0; i < ways_p; i++) begin
           alloc_tag_mem_data[i].tag = addr_tag_v;
@@ -2571,22 +2666,26 @@ module bsg_cache_nb
 
       end
 
-      RECOVER: begin
+      ALLOC_RECOVER: begin
         // FIXME: for now we don't need this as mshr is accessed in tv stage, so even if there's mshr clear
         // or dma data in, they don't affect the recovery, but we should add this later when change to access
         // the mshr cam in tl stage
         //alloc_in_progress_v = 1'b1; 
-        alloc_mshr_state_n = DONE;
-        alloc_recover_v = 1'b1;
+        alloc_mshr_state_n = ALLOC_DONE;
+        alloc_recover_tag_and_track_v = 1'b1;
+        alloc_recover_data_v = alloc_sbuf_yumi_v_r;
+        alloc_sbuf_yumi_v_n = 1'b0;
       end
 
-      DONE: begin
-        alloc_done_v = 1'b1;
-        alloc_mshr_state_n = (v_o & yumi_i) ? IDLE : DONE;
+      ALLOC_DONE: begin
+        // alloc_done_v = 1'b1; FIXME
+        alloc_done_v = ld_miss_v ? 1'b1 : ~dma_serve_read_miss_queue_v_lo;
+        // alloc_mshr_state_n = (v_o & yumi_i) ? ALLOC_IDLE : ALLOC_DONE; FIXME
+        alloc_mshr_state_n = (v_o & yumi_i) & alloc_done_v ? ALLOC_IDLE : ALLOC_DONE;
       end
 
       default: begin
-        alloc_mshr_state_n = IDLE;
+        alloc_mshr_state_n = ALLOC_IDLE;
       end
 
     endcase
@@ -2595,6 +2694,14 @@ module bsg_cache_nb
   // synopsys translate_off
 
   always_ff @ (negedge clk_i) begin
+    assert(block_size_in_words_p > 1)
+      else $fatal(1, "[BSG_FATAL] The number of words in a cache block should be greater than 1. %m, T=%t", $time);
+
+    assert((word_width_p <= dma_data_width_p) 
+          && (dma_data_width_p % word_width_p == 0) 
+          && (burst_size_in_words_lp <= (block_size_in_words_p/2)))
+      else $fatal(1, "[BSG_FATAL] The DMA data width needs to be set to a legit value. %m, T=%t", $time);
+
     if (~reset_i) begin
       if (v_v_r) begin
         // check that there is no multiple hit.
@@ -2616,10 +2723,17 @@ module bsg_cache_nb
       end
     end
   end
-
+  
 
   if (debug_p) begin
     always_ff @ (posedge clk_i) begin
+      //  $display("src_id_v_r-%d, st_miss_v-%d, ld_miss_v-%d, v_o-%d, v_we-%d, v_v_r-%d, tl_we-%d, v_tl_r-%d, alloc_mshr_state_r-%b", 
+      //            src_id_v_r, st_miss_v, ld_miss_v, v_o, v_we, v_v_r, tl_we, v_tl_r, alloc_mshr_state_r);
+      //  $display("dma_mshr_cam_r_v_lo:%d, alloc_read_miss_entry_but_no_empty:%d, st_found_in_mshr_dma_hit_but_not_written_to_dmem_yet%d", 
+      //            dma_mshr_cam_r_v_lo, alloc_read_miss_entry_but_no_empty, st_found_in_mshr_dma_hit_but_not_written_to_dmem_yet);
+      //  $display("st_found_in_mshr_update_mshr_v:%d, mshr_clear:%d, serve_read_queue_output_occupied:%d", 
+      //            st_found_in_mshr_update_mshr_v, mshr_clear, serve_read_queue_output_occupied);
+      // $display("serve_read_queue_output_occupied-%d, alloc_read_miss_entry_but_no_empty-%d, st_found_in_mshr_dma_hit_but_not_written_to_dmem_yet-%d", serve_read_queue_output_occupied, alloc_read_miss_entry_but_no_empty, st_found_in_mshr_dma_hit_but_not_written_to_dmem_yet, $time);
       if (v_o & yumi_i) begin
         if (decode_v_r.ld_op) begin
           $display("<VCACHE> M[%4h] == %8h // %8t", addr_v_r, data_o, $time);

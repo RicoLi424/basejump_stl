@@ -15,9 +15,9 @@ class TestBase:
     self.curr_id = 1  # start from 1 but not 0 cuz there're cases where v_o=1 but no output should be read
                       # so in that case we use src_id=0 as a side check to indicate there's no output
     self.curr_data = 1
-    self.sets_p = 128
+    self.sets_p = 64
     self.ways_p = 8
-    self.block_size_in_words_p = 8
+    self.block_size_in_words_p = 16
 
   def send(self, opcode, addr, mask=0):
     if opcode == SW or opcode == SH or opcode == SB:
@@ -87,13 +87,163 @@ class TestBase:
     self.tg.send(self.curr_id, SW, addr, self.curr_data)
     self.curr_data += 1
     self.curr_id += 1
-  
+
+  # SH
+  def send_sh(self, addr):
+    self.tg.send(self.curr_id, SH, addr, self.curr_data)
+    self.curr_data += 1
+    self.curr_id += 1
+
+  # SB
+  def send_sb(self, addr):
+    self.tg.send(self.curr_id, SB, addr, self.curr_data)
+    self.curr_data += 1
+    self.curr_id += 1
+
+  # SM
+  def send_sm(self, addr, mask):
+    self.tg.send(self.curr_id, SM, addr, self.curr_data, mask)
+    self.curr_data += 1
+    self.curr_id += 1
+   
+  # LM 
+  def send_lm(self, addr, mask):
+    self.tg.send(self.curr_id, LM, addr, 0, mask)
+    self.curr_id += 1
+
   # LW
   def send_lw(self, addr):
     self.tg.send(self.curr_id, LW, addr)
     self.curr_id += 1
-    
 
+  # LH
+  def send_lh(self, addr):
+    self.tg.send(self.curr_id, LH, addr)
+    self.curr_id += 1
+
+  # LB
+  def send_lb(self, addr):
+    self.tg.send(self.curr_id, LB, addr)
+    self.curr_id += 1
+
+  # LHU
+  def send_lhu(self, addr):
+    self.tg.send(self.curr_id, LHU, addr)
+    self.curr_id += 1
+
+  # LBU
+  def send_lbu(self, addr):
+    self.tg.send(self.curr_id, LBU, addr)
+    self.curr_id += 1
+
+  # AMOSWAP_W
+  def send_amoswap_w(self, addr):
+    self.tg.send(self.curr_id, AMOSWAP_W, addr, self.curr_data)
+    self.curr_data += 1
+    self.curr_id += 1
+
+  # AMOADD_W
+  def send_amoadd_w(self, addr):
+    self.tg.send(self.curr_id, AMOADD_W, addr, self.curr_data)
+    self.curr_data += 1
+    self.curr_id += 1
+
+  # AMOXOR_W
+  def send_amoxor_w(self, addr):
+    self.tg.send(self.curr_id, AMOXOR_W, addr, self.curr_data)
+    self.curr_data += 1
+    self.curr_id += 1 
+
+  # AMOAND_W
+  def send_amoand_w(self, addr):
+    self.tg.send(self.curr_id, AMOAND_W, addr, self.curr_data)
+    self.curr_data += 1
+    self.curr_id += 1
+
+  # AMOOR_W
+  def send_amoor_w(self, addr):
+    self.tg.send(self.curr_id, AMOOR_W, addr, self.curr_data)
+    self.curr_data += 1
+    self.curr_id += 1
+
+  # AMOMIN_W
+  def send_amomin_w(self, addr):
+    self.tg.send(self.curr_id, AMOMIN_W, addr, self.curr_data)
+    self.curr_data += 1
+    self.curr_id += 1
+
+  # AMOMAX_W
+  def send_amomax_w(self, addr):
+    self.tg.send(self.curr_id, AMOMAX_W, addr, self.curr_data)
+    self.curr_data += 1
+    self.curr_id += 1
+
+  # AMOMINU_W
+  def send_amominu_w(self, addr):
+    self.tg.send(self.curr_id, AMOMINU_W, addr, self.curr_data)
+    self.curr_data += 1
+    self.curr_id += 1
+
+  # AMOMAXU_W
+  def send_amomaxu_w(self, addr):
+    self.tg.send(self.curr_id, AMOMAXU_W, addr, self.curr_data)
+    self.curr_data += 1
+    self.curr_id += 1
+
+  # AMOSWAP_D
+  def send_amoswap_d(self, addr):
+    self.tg.send(self.curr_id, AMOSWAP_D, addr, self.curr_data)
+    self.curr_data += 1
+    self.curr_id += 1
+
+  # AMOADD_D
+  def send_amoadd_d(self, addr):
+    self.tg.send(self.curr_id, AMOADD_D, addr, self.curr_data)
+    self.curr_data += 1
+    self.curr_id += 1
+
+  # AMOXOR_D
+  def send_amoxor_d(self, addr):
+    self.tg.send(self.curr_id, AMOXOR_D, addr, self.curr_data)
+    self.curr_data += 1
+    self.curr_id += 1
+
+  # AMOAND_D
+  def send_amoand_d(self, addr):
+    self.tg.send(self.curr_id, AMOAND_D, addr, self.curr_data)
+    self.curr_data += 1
+    self.curr_id += 1
+
+  # AMOOR_D
+  def send_amoor_d(self, addr):
+    self.tg.send(self.curr_id, AMOOR_D, addr, self.curr_data)
+    self.curr_data += 1
+
+  # AMOMIN_D
+  def send_amomin_d(self, addr):
+    self.tg.send(self.curr_id, AMOMIN_D, addr, self.curr_data)
+    self.curr_data += 1
+    self.curr_id += 1
+
+  # AMOMAX_D
+  def send_amomax_d(self, addr):
+    self.tg.send(self.curr_id, AMOMAX_D, addr, self.curr_data)
+    self.curr_data += 1
+    self.curr_id += 1
+
+  # AMOMINU_D
+  def send_amominu_d(self, addr):
+    self.tg.send(self.curr_id, AMOMINU_D, addr, self.curr_data)
+    self.curr_data += 1
+    self.curr_id += 1
+
+  # AMOMAXU_D
+  def send_amomaxu_d(self, addr):
+    self.tg.send(self.curr_id, AMOMAXU_D, addr, self.curr_data)
+    self.curr_data += 1    
+    self.curr_id += 1
+
+    
   #                         #
   #   COMPOSITE functions   #
   #                         #
@@ -122,7 +272,7 @@ class TestBase:
 
   def get_addr(self, tag, index, block_offset=0, byte_offset=0):
     addr = tag << 12
-    addr += index << 5
+    addr += index << 6
     addr += block_offset << 2
     addr += byte_offset
     return addr 

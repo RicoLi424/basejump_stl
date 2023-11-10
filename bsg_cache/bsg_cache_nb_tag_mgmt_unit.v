@@ -106,22 +106,8 @@ module bsg_cache_nb_tag_mgmt_unit
   assign tag_mem_w_mask_o = tag_mem_w_mask_out;
   assign stat_mem_w_mask_o = stat_mem_w_mask_out;
 
-  // miss handler FSM
-  //
-  typedef enum logic [3:0] {
-    START
-    ,FLUSH_OP
-    ,LOCK_OP
-    ,SEND_FILL_ADDR
-    ,SEND_EVICT_ADDR
-    ,SEND_EVICT_DATA
-    ,GET_FILL_DATA
-    ,RECOVER
-    ,DONE
-  } miss_state_e;
-
-  miss_state_e miss_state_r;
-  miss_state_e miss_state_n;
+  mgmt_miss_state_e miss_state_r;
+  mgmt_miss_state_e miss_state_n;
   logic [lg_ways_lp-1:0] chosen_way_r, chosen_way_n;
   logic [lg_ways_lp-1:0] flush_way_r, flush_way_n;
 
@@ -225,19 +211,19 @@ module bsg_cache_nb_tag_mgmt_unit
 
     case (miss_state_r)
 
-      START: begin
+      MGMT_START: begin
         stat_mem_v_o = mgmt_unit_boot_up;
         track_mem_v_o = mgmt_unit_boot_up;
         miss_state_n = mgmt_unit_boot_up
                      ? (goto_flush_op
-                       ? FLUSH_OP 
+                       ? MGMT_FLUSH_OP 
                        : (goto_lock_op
-                          ? LOCK_OP
-                          : SEND_FILL_ADDR)) 
-                     : START;
+                          ? MGMT_LOCK_OP
+                          : MGMT_SEND_FILL_ADDR)) 
+                     : MGMT_START;
       end
 
-      SEND_FILL_ADDR: begin
+      MGMT_SEND_FILL_ADDR: begin
         chosen_way_n = chosen_way_i;
         dma_cmd_o = e_dma_send_refill_addr;          
         dma_addr_o = {
@@ -249,13 +235,13 @@ module bsg_cache_nb_tag_mgmt_unit
         // if the chosen way is dirty and valid, then evict.
         miss_state_n = dma_done_i
           ? ((stat_info_in.dirty[chosen_way_n] & valid_v_i[chosen_way_n])
-            ? SEND_EVICT_ADDR
-            : GET_FILL_DATA)
-          : SEND_FILL_ADDR;
+            ? MGMT_SEND_EVICT_ADDR
+            : MGMT_GET_FILL_DATA)
+          : MGMT_SEND_FILL_ADDR;
       end
 
       // Handling the cases for TAGFL, AINV, AFL, AFLINV.
-      FLUSH_OP: begin
+      MGMT_FLUSH_OP: begin
         // for TAGFL, pick whichever way set by the addr input.
         // Otherwise, pick the way with the tag hit.
         flush_way_n = decode_v_i.tagfl_op
@@ -288,12 +274,12 @@ module bsg_cache_nb_tag_mgmt_unit
 
         // If it's not AINV, and the chosen set is dirty and valid, evict the block.
         miss_state_n = (~decode_v_i.ainv_op & stat_info_in.dirty[flush_way_n] & valid_v_i[flush_way_n])
-          ? SEND_EVICT_ADDR
-          : RECOVER;
+          ? MGMT_SEND_EVICT_ADDR
+          : MGMT_RECOVER;
       end
 
       // handling AUNLOCK, and ALOCK with line not missing.
-      LOCK_OP: begin
+      MGMT_LOCK_OP: begin
         tag_mem_v_o = 1'b1;
         tag_mem_w_o = 1'b1;
 
@@ -306,11 +292,11 @@ module bsg_cache_nb_tag_mgmt_unit
           tag_mem_w_mask_out[i].tag = {tag_width_lp{1'b0}};
         end
 
-        miss_state_n = RECOVER;
+        miss_state_n = MGMT_RECOVER;
       end
 
       // Send out the block addr for eviction, before initiating the eviction.
-      SEND_EVICT_ADDR: begin
+      MGMT_SEND_EVICT_ADDR: begin
         dma_cmd_o = e_dma_send_evict_addr;
         dma_addr_o = {
           tag_v_i[curr_way_o],
@@ -319,21 +305,21 @@ module bsg_cache_nb_tag_mgmt_unit
         };
 
         miss_state_n = dma_done_i
-                     ? SEND_EVICT_DATA
-                     : SEND_EVICT_ADDR;
+                     ? MGMT_SEND_EVICT_DATA
+                     : MGMT_SEND_EVICT_ADDR;
 
         evict_v_o = dma_done_i;
       end
 
-      SEND_EVICT_DATA: begin
+      MGMT_SEND_EVICT_DATA: begin
         miss_state_n = dma_done_i
           ? ((decode_v_i.tagfl_op| decode_v_i.aflinv_op| decode_v_i.afl_op) 
-            ? RECOVER 
-            : GET_FILL_DATA)
-          : SEND_EVICT_DATA;
+            ? MGMT_RECOVER 
+            : MGMT_GET_FILL_DATA)
+          : MGMT_SEND_EVICT_DATA;
       end
 
-      GET_FILL_DATA: begin
+      MGMT_GET_FILL_DATA: begin
         stat_mem_v_o = dma_done_i;
         stat_mem_w_o = 1'b1;
         stat_mem_data_out.dirty = {ways_p{decode_v_i.atomic_op}};
@@ -357,27 +343,27 @@ module bsg_cache_nb_tag_mgmt_unit
         end
 
         miss_state_n = dma_done_i
-          ? RECOVER
-          : GET_FILL_DATA;
+          ? MGMT_RECOVER
+          : MGMT_GET_FILL_DATA;
       end
 
       // Spend one cycle to recover the tl stage.
       // By recovering, it means re-reading the data_mem and tag_mem for the tl stage.
-      RECOVER: begin
+      MGMT_RECOVER: begin
         recover_o = 1'b1;
-        miss_state_n = DONE;
+        miss_state_n = MGMT_DONE;
       end
 
       // Miss handling is done. Output is valid.
       // Move onto next state, when the output data is taken.
-      DONE: begin
+      MGMT_DONE: begin
         mgmt_done_o = 1'b1;
-        miss_state_n = ack_i ? START : DONE;
+        miss_state_n = ack_i ? MGMT_START : MGMT_DONE;
       end
 
       // this should never happen, but if it does, go back to START;
       default: begin
-        miss_state_n = START;
+        miss_state_n = MGMT_START;
       end
 
     endcase
@@ -386,7 +372,7 @@ module bsg_cache_nb_tag_mgmt_unit
   // synopsys sync_set_reset "reset_i"
   always_ff @ (posedge clk_i) begin
     if (reset_i) begin
-      miss_state_r <= START;
+      miss_state_r <= MGMT_START;
       chosen_way_r <= '0;
       flush_way_r <= '0;
     end

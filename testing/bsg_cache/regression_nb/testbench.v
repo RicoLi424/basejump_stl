@@ -11,15 +11,14 @@ module testbench();
   //
   parameter src_id_width_p = 30;
   parameter addr_width_p = 32;
-  parameter data_width_p = 32;
-  parameter dma_data_width_p = 64;
-  parameter block_size_in_words_p = 8;
-  parameter sets_p = 128;
+  parameter word_width_p = 32;
+  parameter dma_data_width_p = 256;
+  parameter block_size_in_words_p = 16;
+  parameter sets_p = 64;
   parameter ways_p = 8;
   parameter mshr_els_p = `MSHR_ELS_P;
   parameter read_miss_els_per_mshr_p = `READ_MISS_ELS_PER_MSHR_P;
   parameter word_tracking_p = 0;
-  parameter data_mask_width_lp=(data_width_p>>3);
   parameter mem_size_p = 2**15;
 
   parameter dma_read_delay_p  = `DMA_READ_DELAY_P;
@@ -32,8 +31,10 @@ module testbench();
   localparam lg_ways_lp = `BSG_SAFE_CLOG2(ways_p);
   localparam lg_sets_lp = `BSG_SAFE_CLOG2(sets_p);
   localparam lg_block_size_in_words_lp = `BSG_SAFE_CLOG2(block_size_in_words_p);
+  localparam block_size_in_bursts_lp = (block_size_in_words_p*word_width_p/dma_data_width_p);
+  localparam lg_block_size_in_bursts_lp=`BSG_SAFE_CLOG2(block_size_in_bursts_lp);
   localparam lg_mshr_els_lp = `BSG_SAFE_CLOG2(mshr_els_p);
-  localparam byte_sel_width_lp = `BSG_SAFE_CLOG2(data_width_p>>3);
+  localparam byte_sel_width_lp = `BSG_SAFE_CLOG2(word_width_p>>3);
   localparam tag_width_lp = (addr_width_p-lg_sets_lp-lg_block_size_in_words_lp-byte_sel_width_lp);
   localparam block_offset_width_lp = lg_block_size_in_words_lp+byte_sel_width_lp;
 
@@ -75,14 +76,14 @@ module testbench();
 
   // non-blocking cache
   //
-  `declare_bsg_cache_nb_pkt_s(addr_width_p,data_width_p,src_id_width_p);
+  `declare_bsg_cache_nb_pkt_s(addr_width_p,word_width_p,src_id_width_p);
   bsg_cache_nb_pkt_s cache_pkt;
 
   logic cache_v_li;
   logic cache_yumi_lo;
 
   logic [src_id_width_p-1:0] cache_src_id_lo;
-  logic [data_width_p-1:0] cache_data_lo;
+  logic [word_width_p-1:0] cache_data_lo;
   logic cache_v_lo;
   logic cache_yumi_li;
 
@@ -98,11 +99,19 @@ module testbench();
   logic dma_data_v_lo;
   logic dma_data_yumi_li;
 
+  logic cache_v_we_lo;
+
   // evict_req_fifo
   //
   logic [bsg_cache_nb_dma_pkt_width_lp-1:0] evict_req_fifo_pkt_lo;
   logic evict_req_fifo_valid_li, evict_req_fifo_ready_lo;
   logic evict_req_fifo_valid_lo, evict_req_fifo_yumi_li;
+
+  // evict_data_fifo
+  //
+  logic evict_data_fifo_ready_lo, evict_data_fifo_v_lo;
+  logic evict_data_fifo_yumi_li;
+  logic [dma_data_width_p-1:0] evict_data_fifo_data_lo;
 
   // dma
   //
@@ -118,21 +127,12 @@ module testbench();
 
   // refill_mshr_id_fifo
   //
-  logic refill_mshr_id_fifo_ready_lo;
+  logic refill_mshr_id_fifo_ready_lo, refill_mshr_id_fifo_v_lo;
 
-  // evict data counter
-  //
-  logic [lg_block_size_in_bursts_lp-1:0] evict_data_counter_r, evict_data_counter_n;
-  assign evict_data_counter_n = (dma_data_v_lo & dma_data_yumi_li)
-                              ? (evict_data_counter_r==(block_size_in_bursts_lp-1)
-                                ? '0
-                                : evict_data_counter_r+1)
-                              : evict_data_counter_r;
-  wire cache_line_evict_done = (evict_data_counter_r==(block_size_in_bursts_lp-1)) & dma_data_v_lo & dma_data_yumi_li;
 
   bsg_cache_nb #(
     .addr_width_p(addr_width_p)
-    ,.word_width_p(data_width_p)
+    ,.word_width_p(word_width_p)
     ,.block_size_in_words_p(block_size_in_words_p)
     ,.sets_p(sets_p)
     ,.ways_p(ways_p)
@@ -142,6 +142,7 @@ module testbench();
     ,.word_tracking_p(word_tracking_p)
     ,.dma_data_width_p(dma_data_width_p)
     ,.amo_support_p(amo_support_level_arithmetic_lp)
+    ,.debug_p(0)
   ) DUT (
     .clk_i(clk)
     ,.reset_i(reset)
@@ -167,7 +168,11 @@ module testbench();
     ,.dma_data_o(dma_data_lo)
     ,.dma_data_v_o(dma_data_v_lo)
     ,.dma_data_yumi_i(dma_data_yumi_li)
+
+    ,.v_we_o(cache_v_we_lo)
   );
+
+  assign dma_data_yumi_li = dma_data_v_lo & evict_data_fifo_ready_lo;
 
   // synopsys translate_off
 
@@ -199,34 +204,59 @@ module testbench();
     ,.yumi_i(evict_req_fifo_yumi_li)
   );
 
+  bsg_fifo_1r1w_large #(
+    .width_p(dma_data_width_p)
+    ,.els_p(mshr_els_p*block_size_in_bursts_lp)
+  ) evict_data_fifo (
+    .clk_i(clk)
+    ,.reset_i(reset)
+    ,.data_i(dma_data_lo)
+    ,.v_i(dma_data_v_lo)
+    ,.ready_o(evict_data_fifo_ready_lo) 
+    ,.v_o(evict_data_fifo_v_lo)
+    ,.data_o(evict_data_fifo_data_lo)
+    ,.yumi_i(evict_data_fifo_yumi_li)
+  );
+
+  // evict data counter
+  //
+  logic [lg_block_size_in_bursts_lp-1:0] evict_data_counter_r, evict_data_counter_n;
+  assign evict_data_counter_n = (evict_data_fifo_v_lo & evict_data_fifo_yumi_li)
+                              ? (evict_data_counter_r==(block_size_in_bursts_lp-1)
+                                ? 0
+                                : evict_data_counter_r+1)
+                              : evict_data_counter_r;
+  wire cache_line_evict_done = (evict_data_counter_r==(block_size_in_bursts_lp-1)) & evict_data_fifo_v_lo & evict_data_fifo_yumi_li;
+
   `declare_bsg_cache_nb_dma_pkt_s(addr_width_p,block_size_in_words_p,mshr_els_p);
-  bsg_cache_nb_dma_pkt_s dma_read_pkt, dma_write_pkt;
-  assign dma_read_pkt = cache_dma_pkt_lo;
+  bsg_cache_nb_dma_pkt_s cache_dma_pkt, dma_read_pkt, dma_write_pkt;
+  assign cache_dma_pkt = cache_dma_pkt_lo;
+  assign dma_read_pkt = cache_dma_pkt;
   assign dma_write_pkt = evict_req_fifo_pkt_lo;
 
   assign cache_dma_pkt_yumi_li = cache_dma_pkt_v_lo
-                               & ( cache_dma_pkt_lo.write_not_read
+                               & ( cache_dma_pkt.write_not_read
                                  ? evict_req_fifo_ready_lo
                                  : dma_read_pkt_yumi_lo );
 
-  assign evict_req_fifo_valid_li = cache_dma_pkt_v_lo & cache_dma_pkt_lo.write_not_read;
+  assign evict_req_fifo_valid_li = cache_dma_pkt_v_lo & cache_dma_pkt.write_not_read;
   assign evict_req_fifo_yumi_li = cache_line_evict_done;
 
 
   // DMA model
   bsg_nonsynth_nb_dma_model #(
     .addr_width_p(addr_width_p)
-    ,.data_width_p(data_width_p)
+    ,.word_width_p(word_width_p)
     ,.dma_data_width_p(dma_data_width_p)
     ,.mask_width_p(block_size_in_words_p)
     ,.block_size_in_words_p(block_size_in_words_p)
     ,.mshr_els_p(mshr_els_p)
     ,.els_p(mem_size_p)
 
-    ,.read_delay_p(`DMA_READ_DELAY_P)
-    ,.write_delay_p(`DMA_WRITE_DELAY_P)
-    ,.dma_req_delay_p(`DMA_REQ_DELAY_P)
-    ,.dma_data_delay_p(`DMA_DATA_DELAY_P)
+    ,.read_delay_p(dma_read_delay_p)
+    ,.write_delay_p(dma_write_delay_p)
+    ,.dma_req_delay_p(dma_req_delay_p)
+    ,.dma_data_delay_p(dma_data_delay_p)
 
   ) dma0 (
     .clk_i(clk)
@@ -245,12 +275,12 @@ module testbench();
     ,.dma_data_v_o(dma_refill_data_v_lo)
     ,.dma_data_ready_i(refill_data_fifo_ready_lo & refill_mshr_id_fifo_ready_lo)
 
-    ,.dma_data_i(dma_data_lo)
-    ,.dma_data_v_i(dma_data_v_lo)
-    ,.dma_data_yumi_o(dma_data_yumi_li)
+    ,.dma_data_i(evict_data_fifo_data_lo)
+    ,.dma_data_v_i(evict_data_fifo_v_lo)
+    ,.dma_data_yumi_o(evict_data_fifo_yumi_li)
   );
 
-  assign dma_read_pkt_v_li = cache_dma_pkt_v_lo & ~cache_dma_pkt_lo.write_not_read & ~evict_req_fifo_valid_lo;
+  assign dma_read_pkt_v_li = cache_dma_pkt_v_lo & ~cache_dma_pkt.write_not_read & ~evict_req_fifo_valid_lo;
   assign dma_write_pkt_v_li = evict_req_fifo_valid_lo;
 
   bsg_fifo_1r1w_large #(
@@ -278,7 +308,7 @@ module testbench();
     ,.data_i(dma_refill_mshr_id_lo)
     ,.v_i(dma_refill_data_v_lo)
     ,.ready_o(refill_mshr_id_fifo_ready_lo)
-    ,.v_o(dma_data_v_li)
+    ,.v_o(refill_mshr_id_fifo_v_lo)
     ,.data_o(dma_mshr_id_li)
     ,.yumi_i(refill_data_fifo_yumi_li)
   );
@@ -288,7 +318,7 @@ module testbench();
   //
   localparam rom_addr_width_lp = 26; 
   localparam ring_width_lp =
-    `bsg_cache_nb_pkt_width(addr_width_p,data_width_p,src_id_width_p);
+    `bsg_cache_nb_pkt_width(addr_width_p,word_width_p,src_id_width_p);
 
   logic [rom_addr_width_lp-1:0] trace_rom_addr;
   logic [ring_width_lp+4-1:0] trace_rom_data;
@@ -336,8 +366,8 @@ module testbench();
   assign tr_yumi_li = tr_v_lo & cache_yumi_lo;
 
 
-  bind bsg_cache_non_blocking basic_checker #(
-    .data_width_p(data_width_p)
+  bind bsg_cache_nb basic_checker #(
+    .word_width_p(word_width_p)
     ,.src_id_width_p(src_id_width_p)
     ,.addr_width_p(addr_width_p)
     ,.mem_size_p($root.testbench.mem_size_p)
@@ -347,8 +377,8 @@ module testbench();
   );
 
 
-  bind bsg_cache_non_blocking tag_checker #(
-    .data_width_p(data_width_p)
+  bind bsg_cache_nb tag_checker #(
+    .word_width_p(word_width_p)
     ,.src_id_width_p(src_id_width_p)
     ,.addr_width_p(addr_width_p)
     ,.tag_width_lp(tag_width_lp)
@@ -360,8 +390,8 @@ module testbench();
     ,.en_i($root.testbench.checker == "tag")
   );
 
-  bind bsg_cache_non_blocking ainv_checker #(
-    .data_width_p(data_width_p)
+  bind bsg_cache_nb ainv_checker #(
+    .word_width_p(word_width_p)
     ,.src_id_width_p(src_id_width_p)
   ) ac (
     .*
@@ -376,15 +406,13 @@ module testbench();
   bind bsg_cache_nb cov_top #(.mshr_els_p(mshr_els_p)) _cov_top (.*);
   bind bsg_cache_nb_evict_fill_transmitter cov_trans _cov_trans (.*);
   bind bsg_cache_nb_tag_mgmt_unit cov_mgmt #(.ways_p(ways_p)) _cov_mgmt (.*);
-  bind bsg_cache_nb_dma cov_dma #(.dma_data_width_p(dma_data_width_p) ,.word_width_p(data_width_p) ,.block_size_in_words_p(block_size_in_words_p)) _cov_dma (.*);
+  bind bsg_cache_nb_dma cov_dma #(.block_size_in_bursts_p(block_size_in_bursts_lp)) _cov_dma (.*);
+  bind bsg_cache_nb_mhu cov_mhu #(.ways_p(ways_p)) _cov_mhu (.*);
+  // bind mhu[0].miss_handling_unit cov_mhu _cov_mhu_inst[0] (.*);
 
-  generate
-    for (genvar i = 0; i < mshr_els_p; i++) begin : bind_each_mhu
-      string inst_name;
-      $sformat(inst_name, "mhu[%0d].miss_handling_unit", i);
-      bind inst_name cov_mhu _cov_mhu_inst[i](.*);
-    end
-  endgenerate
+
+
+
 
   always_ff @ (posedge clk) begin
     if (reset) begin
@@ -412,11 +440,10 @@ module testbench();
 
       if (cache_v_lo & (cache_src_id_lo!=0) & cache_yumi_li)
         recv_r <= recv_r + 1;
-
+     //$display("done=%d, sent_r=%d, recv_r=%d", done, sent_r, recv_r);
+     //$display("cache_v_lo=%d, cache_yumi_li=%d", cache_v_lo, cache_yumi_li);
     end
   end
-
-
 
   initial begin
     wait(done & (sent_r == recv_r));
@@ -430,3 +457,5 @@ module testbench();
   // synopsys translate_on
 
 endmodule
+
+

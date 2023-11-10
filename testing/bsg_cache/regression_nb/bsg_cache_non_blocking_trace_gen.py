@@ -57,7 +57,7 @@ class BsgCacheNonBlockingTraceGen:
     self.addr_width_p = addr_width_p
     self.data_width_p = data_width_p
     self.data_mask_width_lp = (data_width_p>>3)
-    self.packet_len = id_width_p + addr_width_p + data_width_p + 5 + self.data_mask_width_lp
+    self.packet_len = id_width_p + addr_width_p + data_width_p + 6 + self.data_mask_width_lp
 
 
   # send packet
