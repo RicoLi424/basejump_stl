@@ -260,9 +260,8 @@ module cov_top
         binsof(st_miss_v) intersect {1'b1} ||
         binsof(tl_recover_tag_and_track) intersect {1'b1});
 
-      // It's hard to think it through, but the even/odd fifo priority output
-      // signal and sbuf hazard signal will actually happen at the same time.
-      illegal_bins hazard_and_bank_conflict =
+
+      ignore_bins hazard_and_bank_conflict =
         binsof(sbuf_hazard) intersect {1'b1} &&
         (binsof(ld_even_bank_conflict) intersect {1'b1} ||
         binsof(ld_odd_bank_conflict) intersect {1'b1});

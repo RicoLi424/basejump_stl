@@ -31,7 +31,7 @@ module bsg_cache_nb_tag_mgmt_unit
     ,input [addr_width_p-1:0] addr_v_i
     ,input [ways_p-1:0][tag_width_lp-1:0] tag_v_i
     ,input [ways_p-1:0] valid_v_i
-    ,input [ways_p-1:0] lock_v_i
+    //,input [ways_p-1:0] lock_v_i
     ,input [ways_p-1:0] tag_hit_v_i
     ,input [lg_ways_lp-1:0] tag_hit_way_id_i
     ,input tag_hit_found_i

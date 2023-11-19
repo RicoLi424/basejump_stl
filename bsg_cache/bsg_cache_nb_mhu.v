@@ -224,7 +224,9 @@ module bsg_cache_nb_mhu
   logic [lg_sets_lp-1:0] curr_addr_index;
 
   assign curr_addr_index
-    = curr_cache_line_offset_r[0+:lg_sets_lp];
+    = (sets_p > 1)
+    ? curr_cache_line_offset_r[0+:lg_sets_lp]
+    : 1'b0;
   assign curr_addr_tag
     = (sets_p == 1)
       ? curr_cache_line_offset_r[0+:tag_width_lp]

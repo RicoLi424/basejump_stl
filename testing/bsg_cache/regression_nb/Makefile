@@ -37,7 +37,7 @@ HIGHLIGHT = grep --color -E '^|Fatal|Error|Warning|Implicit wire is used|Too few
 ### TEST parameters ####
 
 MSHR_ELS_P        		 = 2
-READ_MISS_ELS_PER_MSHR_P = 8
+READ_MISS_ELS_PER_MSHR_P = 16
 DMA_READ_DELAY_P  		 = 64
 DMA_WRITE_DELAY_P 		 = 64
 DMA_DATA_DELAY_P  		 = 4

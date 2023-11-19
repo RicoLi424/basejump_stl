@@ -162,6 +162,7 @@ module bsg_cache_nb_evict_fill_transmitter
      */
 
      logic [`BSG_SAFE_MINUS(dma_data_width_p,1):0] even_bank_data_way_picked, odd_bank_data_way_picked;
+     logic evict_data_mem_access_done_r; // Used as part of condition for evict_data_sent_to_dma_done_o
 
      // since the fifo is set big enough so ready_o is always 1, it can always take in data asap 
      // as long as there is valid data out there, so we don't need to buffer bank's out data for eviction,
@@ -193,12 +194,9 @@ module bsg_cache_nb_evict_fill_transmitter
 
      wire filling_en = (refill_en_r | refill_we_i) | (store_tag_miss_en_r | store_tag_miss_we_i);
 
-     // when evict_en_r = 1, even/odd counter increments when these conditions are met
-     // we sort this out separately because at the first clk edge of eviction, we want the counters up
-     // while we don't wanna fifos to take in data as the data hasn't been read from dmem yet
      logic evict_even_counter_en_li, evict_odd_counter_en_li;
-     assign evict_even_counter_en_li = evict_en_r & even_bank_v_o;
-     assign evict_odd_counter_en_li = evict_en_r & odd_bank_v_o;
+     assign evict_even_counter_en_li = (evict_we_i | evict_en_r) & even_bank_v_o;
+     assign evict_odd_counter_en_li = (evict_we_i | evict_en_r) & odd_bank_v_o;
 
      // counter for store tag miss writing mshr data (or refill writing data from sipo into fifos)
      bsg_counter_set_en #(
@@ -477,24 +475,24 @@ module bsg_cache_nb_evict_fill_transmitter
      
      // TODO: 这里如果利用track bits就可以有些时候不用读bank，那么假如一开始读的一直是另一个bank，
      // TODO：需要后面一直给这个bank priority的时候，由于有几个burst不用读，就可以减少cache stall的cycles
-     //assign odd_bank_v_o = odd_bank_v_i & ((evict_en_r & (odd_fifo_ready_lo & (|odd_track_bits_offset_picked) & ~odd_fifo_done)) | (filling_en & odd_fifo_v_lo));
-     assign odd_bank_v_o = odd_bank_v_i & ((evict_en_r & (odd_fifo_ready_lo & ~odd_fifo_done)) | (filling_en & odd_fifo_v_lo));
+     //assign odd_bank_v_o = odd_bank_v_i & (((evict_we_i | evict_en_r) & (odd_fifo_ready_lo & (|odd_track_bits_offset_picked) & ~odd_fifo_done)) | (filling_en & odd_fifo_v_lo));
+     assign odd_bank_v_o = odd_bank_v_i & (((evict_we_i | evict_en_r) & (odd_fifo_ready_lo & ~odd_fifo_done)) | (filling_en & odd_fifo_v_lo));
      assign odd_bank_w_o = filling_en;
 
-     //assign even_bank_v_o = even_bank_v_i & ((evict_en_r & (even_fifo_ready_lo & (|even_track_bits_offset_picked) & ~even_fifo_done)) | (filling_en & even_fifo_v_lo));
-     assign even_bank_v_o = even_bank_v_i & ((evict_en_r & (even_fifo_ready_lo & ~even_fifo_done)) | (filling_en & even_fifo_v_lo));
+     //assign even_bank_v_o = even_bank_v_i & (((evict_we_i | evict_en_r) & (even_fifo_ready_lo & (|even_track_bits_offset_picked) & ~even_fifo_done)) | (filling_en & even_fifo_v_lo));
+     assign even_bank_v_o = even_bank_v_i & (((evict_we_i | evict_en_r) & (even_fifo_ready_lo & ~even_fifo_done)) | (filling_en & even_fifo_v_lo));
      assign even_bank_w_o = filling_en;
 
      if (num_of_burst_per_bank_lp == 1) begin
-       assign even_bank_addr_o = addr_index_r;
-       assign odd_bank_addr_o = addr_index_r;
+       assign even_bank_addr_o = evict_we_i ? addr_index_i : addr_index_r;
+       assign odd_bank_addr_o = evict_we_i ? addr_index_i : addr_index_r;
      end else begin
        assign even_bank_addr_o = {
-         {(sets_p>1){addr_index_r}},
+         {(sets_p>1){evict_we_i ? addr_index_i : addr_index_r}},
          even_counter_r[0+:lg_num_of_burst_per_bank_lp]
        };
        assign odd_bank_addr_o = {
-         {(sets_p>1){addr_index_r}},
+         {(sets_p>1){evict_we_i ? addr_index_i : addr_index_r}},
          odd_counter_r[0+:lg_num_of_burst_per_bank_lp]
        };
      end
@@ -517,7 +515,9 @@ module bsg_cache_nb_evict_fill_transmitter
      
      assign dma_refill_done_o = refill_en_r & data_mem_access_done_o;
      assign store_tag_miss_fill_done = store_tag_miss_en_r & data_mem_access_done_o;
-     assign evict_data_sent_to_dma_done_o = evict_en_r & data_mem_access_done_o & ~even_fifo_v_lo & ~odd_fifo_v_lo & ~dma_evict_v_o;
+     // For evict, we need to use evict_data_mem_access_done_r instead of data_mem_access_done_o, otherwise when num_of_burst_per_bank_lp=1,
+     // The evict state of transmitter will be cleared before data is written into fifo
+     assign evict_data_sent_to_dma_done_o = evict_en_r & evict_data_mem_access_done_r & ~even_fifo_v_lo & ~odd_fifo_v_lo & ~dma_evict_v_o;
 
      for(genvar i=0; i<mshr_els_p; i++) begin: mhu_stm_fill_done
        assign mhu_store_tag_miss_fill_done_o[i] = (i==mshr_id_r) & mhu_write_fill_data_in_progress_i[i] & store_tag_miss_fill_done & ~transmitter_fill_hold_i;
@@ -551,10 +551,17 @@ module bsg_cache_nb_evict_fill_transmitter
          //odd_bank_data_way_picked_r <= '0;
          odd_bank_evict_v_o_r <= 1'b0;
          even_bank_evict_v_o_r <= 1'b0;
+         evict_data_mem_access_done_r <= 1'b0;
        end else begin
 
-         odd_bank_evict_v_o_r <= (odd_bank_v_i & evict_en_r & (odd_fifo_ready_lo & ~odd_fifo_done));
-         even_bank_evict_v_o_r <= (even_bank_v_i & evict_en_r & (even_fifo_ready_lo & ~even_fifo_done));
+         odd_bank_evict_v_o_r <= (odd_bank_v_i & (evict_we_i | evict_en_r) & (odd_fifo_ready_lo & ~odd_fifo_done));
+         even_bank_evict_v_o_r <= (even_bank_v_i & (evict_we_i | evict_en_r) & (even_fifo_ready_lo & ~even_fifo_done));
+
+         if(evict_data_sent_to_dma_done_o) begin
+           evict_data_mem_access_done_r <= 1'b0;
+         end else if (evict_en_r & odd_fifo_done & even_fifo_done) begin
+           evict_data_mem_access_done_r <= 1'b1;
+         end
 
          if (evict_we_i) begin
            evict_en_r <= 1'b1;
@@ -590,9 +597,9 @@ module bsg_cache_nb_evict_fill_transmitter
            addr_index_r <= addr_index_i;
          end
 
-         if (evict_data_sent_to_dma_done_o) evict_en_r <= 0;
-         if (dma_refill_done_o) refill_en_r <= 0;
-         if ((|mhu_store_tag_miss_fill_done_o)) store_tag_miss_en_r <= 0;
+         if (evict_data_sent_to_dma_done_o) evict_en_r <= 1'b0;
+         if (dma_refill_done_o) refill_en_r <= 1'b0;
+         if ((|mhu_store_tag_miss_fill_done_o)) store_tag_miss_en_r <= 1'b0;
          
        end
      end

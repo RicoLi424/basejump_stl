@@ -172,7 +172,7 @@ module testbench();
     ,.v_we_o(cache_v_we_lo)
   );
 
-  assign dma_data_yumi_li = dma_data_v_lo & evict_data_fifo_ready_lo;
+  //assign dma_data_yumi_li = dma_data_v_lo & evict_data_fifo_ready_lo;
 
   // synopsys translate_off
 
@@ -204,29 +204,30 @@ module testbench();
     ,.yumi_i(evict_req_fifo_yumi_li)
   );
 
-  bsg_fifo_1r1w_large #(
-    .width_p(dma_data_width_p)
-    ,.els_p(mshr_els_p*block_size_in_bursts_lp)
-  ) evict_data_fifo (
-    .clk_i(clk)
-    ,.reset_i(reset)
-    ,.data_i(dma_data_lo)
-    ,.v_i(dma_data_v_lo)
-    ,.ready_o(evict_data_fifo_ready_lo) 
-    ,.v_o(evict_data_fifo_v_lo)
-    ,.data_o(evict_data_fifo_data_lo)
-    ,.yumi_i(evict_data_fifo_yumi_li)
-  );
+  // bsg_fifo_1r1w_large #(
+  //   .width_p(dma_data_width_p)
+  //   ,.els_p(mshr_els_p*block_size_in_bursts_lp)
+  // ) evict_data_fifo (
+  //   .clk_i(clk)
+  //   ,.reset_i(reset)
+  //   ,.data_i(dma_data_lo)
+  //   ,.v_i(dma_data_v_lo)
+  //   ,.ready_o(evict_data_fifo_ready_lo) 
+  //   ,.v_o(evict_data_fifo_v_lo)
+  //   ,.data_o(evict_data_fifo_data_lo)
+  //   ,.yumi_i(evict_data_fifo_yumi_li)
+  // );
 
   // evict data counter
   //
   logic [lg_block_size_in_bursts_lp-1:0] evict_data_counter_r, evict_data_counter_n;
-  assign evict_data_counter_n = (evict_data_fifo_v_lo & evict_data_fifo_yumi_li)
+  assign evict_data_counter_n = (dma_data_v_lo & dma_data_yumi_li) //(evict_data_fifo_v_lo & evict_data_fifo_yumi_li)
                               ? (evict_data_counter_r==(block_size_in_bursts_lp-1)
                                 ? 0
                                 : evict_data_counter_r+1)
                               : evict_data_counter_r;
-  wire cache_line_evict_done = (evict_data_counter_r==(block_size_in_bursts_lp-1)) & evict_data_fifo_v_lo & evict_data_fifo_yumi_li;
+  //wire cache_line_evict_done = (evict_data_counter_r==(block_size_in_bursts_lp-1)) & evict_data_fifo_v_lo & evict_data_fifo_yumi_li;
+  wire cache_line_evict_done = (evict_data_counter_r==(block_size_in_bursts_lp-1)) & dma_data_v_lo & dma_data_yumi_li;
 
   `declare_bsg_cache_nb_dma_pkt_s(addr_width_p,block_size_in_words_p,mshr_els_p);
   bsg_cache_nb_dma_pkt_s cache_dma_pkt, dma_read_pkt, dma_write_pkt;
@@ -275,9 +276,14 @@ module testbench();
     ,.dma_data_v_o(dma_refill_data_v_lo)
     ,.dma_data_ready_i(refill_data_fifo_ready_lo & refill_mshr_id_fifo_ready_lo)
 
-    ,.dma_data_i(evict_data_fifo_data_lo)
-    ,.dma_data_v_i(evict_data_fifo_v_lo)
-    ,.dma_data_yumi_o(evict_data_fifo_yumi_li)
+    //,.dma_data_i(evict_data_fifo_data_lo)
+    ,.dma_data_i(dma_data_lo)
+    
+    //,.dma_data_v_i(evict_data_fifo_v_lo)
+    ,.dma_data_v_i(dma_data_v_lo)
+
+    //,.dma_data_yumi_o(evict_data_fifo_yumi_li)
+    ,.dma_data_yumi_o(dma_data_yumi_li)
   );
 
   assign dma_read_pkt_v_li = cache_dma_pkt_v_lo & ~cache_dma_pkt.write_not_read & ~evict_req_fifo_valid_lo;

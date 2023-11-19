@@ -5,7 +5,7 @@ module bsg_cache_nb
   import bsg_cache_nb_pkg::*;
   #(parameter `BSG_INV_PARAM(addr_width_p) // byte addr
     ,parameter `BSG_INV_PARAM(word_width_p)  // word size
-    ,parameter `BSG_INV_PARAM(block_size_in_words_p)
+    ,parameter `BSG_INV_PARAM(block_size_in_words_p) // MUST be bigger than 1
     ,parameter `BSG_INV_PARAM(sets_p)
     ,parameter `BSG_INV_PARAM(ways_p)
     ,parameter `BSG_INV_PARAM(mshr_els_p)
@@ -94,7 +94,7 @@ module bsg_cache_nb
   localparam dma_data_mask_width_lp=(dma_data_width_p>>3);
   localparam data_bank_els_lp=(sets_p*num_of_burst_per_bank_lp);
   localparam lg_data_bank_els_lp=`BSG_SAFE_CLOG2(data_bank_els_lp);
-  localparam sbuf_data_mem_addr_offset_lp=(block_size_in_bursts_lp == block_size_in_words_p) ? lg_block_size_in_words_lp+$clog2(sets_p) : lg_block_size_in_bursts_lp+$clog2(sets_p); 
+  localparam sbuf_data_mem_addr_offset_lp=lg_block_size_in_bursts_lp+$clog2(sets_p); 
 
   localparam evict_fifo_info_width_lp = `bsg_cache_nb_evict_fifo_entry_width(ways_p, sets_p, mshr_els_p);
   localparam store_tag_miss_fifo_info_width_lp = `bsg_cache_nb_store_tag_miss_fifo_entry_width(ways_p, sets_p, mshr_els_p, word_width_p, block_size_in_words_p);
@@ -590,9 +590,13 @@ module bsg_cache_nb
   assign addr_way
     = cache_pkt.addr[way_offset_width_lp+:lg_ways_lp];
   assign addr_index
-    = cache_pkt.addr[block_offset_width_lp+:lg_sets_lp];
+    = (sets_p > 1)
+    ? cache_pkt.addr[block_offset_width_lp+:lg_sets_lp]
+    : 1'b0;
   assign addr_block_offset
-    = cache_pkt.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp];
+    = (block_size_in_words_p > 1)
+      ? cache_pkt.addr[lg_data_mask_width_lp+:lg_block_size_in_words_lp]
+      : 1'b0;
   
 
   wire ld_even_bank = (v_i & (decode.ld_op | decode.atomic_op) & addr_block_offset % 2 == 0);
@@ -646,7 +650,7 @@ module bsg_cache_nb
     assign ld_data_mem_addr = {{(sets_p>1){addr_index}}, cache_pkt.addr[(lg_data_mask_width_lp+1)+:(lg_block_size_in_words_lp-1)]};
   end
   else begin
-    assign ld_data_mem_addr = {addr_index, cache_pkt.addr[(lg_data_mask_width_lp+lg_burst_size_in_words_lp+1)+:(lg_block_size_in_bursts_lp-1)]};
+    assign ld_data_mem_addr = {{(sets_p>1){addr_index}}, cache_pkt.addr[(lg_data_mask_width_lp+lg_burst_size_in_words_lp+1)+:(lg_block_size_in_bursts_lp-1)]};
   end
 
 
@@ -705,10 +709,12 @@ module bsg_cache_nb
     end
   end
 
-  assign addr_index_tl =
-    addr_tl_r[block_offset_width_lp+:lg_sets_lp];
-  assign addr_block_offset_tl =
-    addr_tl_r[lg_data_mask_width_lp+:lg_block_size_in_words_lp];
+  assign addr_index_tl = (sets_p > 1)
+    ? addr_tl_r[block_offset_width_lp+:lg_sets_lp]
+    : 1'b0;
+  assign addr_block_offset_tl = (block_size_in_words_p > 1)
+    ? addr_tl_r[lg_data_mask_width_lp+:lg_block_size_in_words_lp]
+    : 1'b0;
 
   // tag_mem
   //
@@ -744,7 +750,7 @@ module bsg_cache_nb
     assign recover_data_mem_addr = {{(sets_p>1){addr_index_tl}}, addr_tl_r[(lg_data_mask_width_lp+1)+:(lg_block_size_in_words_lp-1)]};
   end
   else begin
-    assign recover_data_mem_addr = {addr_index_tl, addr_tl_r[(lg_data_mask_width_lp+lg_burst_size_in_words_lp+1)+:(lg_block_size_in_bursts_lp-1)]};
+    assign recover_data_mem_addr = {{(sets_p>1){addr_index_tl}}, addr_tl_r[(lg_data_mask_width_lp+lg_burst_size_in_words_lp+1)+:(lg_block_size_in_bursts_lp-1)]};
   end
 
   // data_mem
@@ -864,8 +870,9 @@ module bsg_cache_nb
 
   assign addr_tag_v =
     addr_v_r[way_offset_width_lp+:tag_width_lp];
-  assign addr_index_v =
-    addr_v_r[block_offset_width_lp+:lg_sets_lp];
+  assign addr_index_v = (sets_p > 1)
+    ? addr_v_r[block_offset_width_lp+:lg_sets_lp]
+    : 1'b0;
   assign addr_way_v =
     addr_v_r[way_offset_width_lp+:lg_ways_lp];
   assign addr_block_offset_v = (block_size_in_words_p > 1)
@@ -1126,7 +1133,7 @@ module bsg_cache_nb
     ,.addr_v_i(addr_v_r)
     ,.tag_v_i(tag_v_r)
     ,.valid_v_i(valid_v_r)
-    ,.lock_v_i(lock_v_r)
+    //,.lock_v_i(lock_v_r)
     ,.tag_hit_v_i(tag_hit_v)
     ,.tag_hit_way_id_i(tag_hit_way_id_v)
     ,.tag_hit_found_i(tag_hit_found_v)
@@ -1391,20 +1398,20 @@ module bsg_cache_nb
                                                          & ((~tbuf_empty_lo & 
                                                              (( tbuf_el0_valid_snoop_lo
                                                               & tbuf_el0_way_snoop_lo == mhu_chosen_way_lo[i]
-                                                              & tbuf_el0_addr_snoop_lo[block_offset_width_lp+:lg_sets_lp] == mhu_curr_addr_index_lo[i]
+                                                              & ((sets_p > 1) ? tbuf_el0_addr_snoop_lo[block_offset_width_lp+:lg_sets_lp] : 1'b0) == mhu_curr_addr_index_lo[i]
                                                               )
                                                              |( tbuf_el1_valid_snoop_lo
                                                               & tbuf_el1_way_snoop_lo == mhu_chosen_way_lo[i]
-                                                              & tbuf_el1_addr_snoop_lo[block_offset_width_lp+:lg_sets_lp] == mhu_curr_addr_index_lo[i]
+                                                              & ((sets_p > 1) ? tbuf_el1_addr_snoop_lo[block_offset_width_lp+:lg_sets_lp] : 1'b0) == mhu_curr_addr_index_lo[i]
                                                               ))) 
                                                            | (~sbuf_empty_lo & 
                                                               (( sbuf_el0_valid_snoop_lo
                                                                & sbuf_el0_way_snoop_lo == mhu_chosen_way_lo[i]
-                                                               & sbuf_el0_addr_snoop_lo[block_offset_width_lp+:lg_sets_lp] == mhu_curr_addr_index_lo[i]
+                                                               & ((sets_p > 1) ? sbuf_el0_addr_snoop_lo[block_offset_width_lp+:lg_sets_lp] : 1'b0) == mhu_curr_addr_index_lo[i]
                                                                )
                                                               |( sbuf_el1_valid_snoop_lo
                                                                & sbuf_el1_way_snoop_lo == mhu_chosen_way_lo[i]
-                                                               & sbuf_el1_addr_snoop_lo[block_offset_width_lp+:lg_sets_lp] == mhu_curr_addr_index_lo[i]
+                                                               & ((sets_p > 1) ? sbuf_el1_addr_snoop_lo[block_offset_width_lp+:lg_sets_lp] : 1'b0) == mhu_curr_addr_index_lo[i]
                                                                )))
                                                            );
   
@@ -1612,7 +1619,7 @@ module bsg_cache_nb
       : '0;
   end
   if (num_of_burst_per_bank_lp == 1) begin
-    assign sbuf_data_mem_addr = sbuf_entry_lo.addr[block_offset_width_lp+:lg_sets_lp];
+    assign sbuf_data_mem_addr = (sets_p > 1) ? sbuf_entry_lo.addr[block_offset_width_lp+:lg_sets_lp] : 1'b0;
   end 
   else if (num_of_burst_per_bank_lp == num_of_words_per_bank_lp) begin
     assign sbuf_data_mem_addr = sbuf_entry_lo.addr[(lg_data_mask_width_lp+1)+:(sbuf_data_mem_addr_offset_lp-1)];
@@ -1845,7 +1852,7 @@ module bsg_cache_nb
   //   ,.o(tbuf_word_offset_decode)
   // );
 
-  // assign tbuf_track_mem_addr = tbuf_addr_lo[block_offset_width_lp+:lg_sets_lp];
+  // assign tbuf_track_mem_addr = (sets_p > 1) ? tbuf_addr_lo[block_offset_width_lp+:lg_sets_lp] : 1'b0;
   // for (genvar i = 0 ; i < ways_p; i++) begin
   //   assign tbuf_track_mem_data[i] = {block_size_in_words_p{1'b1}};
   //   assign tbuf_track_mem_w_mask[i] = tbuf_way_decode[i] ? tbuf_word_offset_decode : {block_size_in_words_p{1'b0}};
@@ -2295,7 +2302,7 @@ module bsg_cache_nb
   assign evict_fifo_valid_li = mhu_evict_v_o_found | mgmt_evict_v_lo;
   assign evict_fifo_yumi_li = evict_fifo_valid_lo & transmitter_evict_we_li;
   assign evict_fifo_entry_li.way = mgmt_v ? mgmt_curr_way_lo : mhu_chosen_way_lo[mhu_evict_mshr_id]; 
-  assign evict_fifo_entry_li.index = mgmt_v ? addr_v_r[block_offset_width_lp+:lg_sets_lp] : mhu_curr_addr_index_lo[mhu_evict_mshr_id];
+  assign evict_fifo_entry_li.index = mgmt_v ? ((sets_p > 1) ? addr_v_r[block_offset_width_lp+:lg_sets_lp] : 1'b0) : mhu_curr_addr_index_lo[mhu_evict_mshr_id];
   assign evict_fifo_entry_li.mshr_id = mgmt_v ? '0 : mhu_evict_mshr_id;
 
   // store tag miss fifo, input from MHUs, output to transmitter

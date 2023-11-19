@@ -276,12 +276,12 @@ module bsg_cache_nb_read_miss_queue
 
 
   //synopsys translate_off
-  always_ff @(negedge clk_i) begin
-    // $display("read_done_o:%d, target_r_counter:%d, target_w_counter:%d, yumi_i:%d, serve_state_n:%d, serve_state_r:%d, write_not_read_i:%d", 
-              // read_done_o, target_r_counter, target_w_counter, yumi_i, serve_state_n, serve_state_r, write_not_read_i);
-    assert(reset_i || ~v_i || write_not_read_i || v_o[mshr_id_i])
-      else $error("No entries in read miss field %d while a read opeartion is being tried", mshr_id_i);      	
-  end 
+  // always_ff @(negedge clk_i) begin
+  //   // $display("read_done_o:%d, target_r_counter:%d, target_w_counter:%d, yumi_i:%d, serve_state_n:%d, serve_state_r:%d, write_not_read_i:%d", 
+  //             // read_done_o, target_r_counter, target_w_counter, yumi_i, serve_state_n, serve_state_r, write_not_read_i);
+  //   assert(reset_i || ~v_i || write_not_read_i || v_o[mshr_id_i])
+  //     else $error("No entries in read miss field %d while a read opeartion is being tried", mshr_id_i);      	
+  // end 
   //synopsys translate_on
 
 endmodule

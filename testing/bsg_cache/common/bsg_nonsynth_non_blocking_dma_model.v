@@ -105,7 +105,7 @@ module bsg_nonsynth_non_blocking_dma_model
           ? DELAY
           : WAIT;
         rd_delay_n = start_read & rd_req_delay_zero
-          ? $urandom_range(dma_data_delay_p, 0)
+          ? $urandom_range(read_delay_p, 0)
           : rd_delay_r;
       end
 
@@ -196,7 +196,7 @@ module bsg_nonsynth_non_blocking_dma_model
           ? DELAY
           : WAIT;
         wr_delay_n = start_write & wr_req_delay_zero
-          ? $urandom_range(dma_data_delay_p,0)
+          ? $urandom_range(write_delay_p,0)
           : wr_delay_r;
       end
       

@@ -370,7 +370,7 @@ module bsg_cache_nb_dma
       {(block_offset_width_lp){1'b0}}
     };
     dma_pkt.mask = '0;
-    dma_pkt.mshr_id = mhu_req_mshr_id_i;
+    dma_pkt.mshr_id = mgmt_v_i ? '0 : mhu_req_mshr_id_i;
 
     case (mhu_or_mgmt_cmd_i)
       e_dma_send_refill_addr: begin
@@ -437,7 +437,7 @@ module bsg_cache_nb_dma
   assign transmitter_track_data_way_picked_o = mgmt_v_i ? track_mem_data_tl_way_picked_i : mhu_refill_track_data_way_picked_i;
   assign transmitter_track_miss_o = mgmt_v_i ? 1'b0 : mhu_refill_track_miss_i; //FIXME:mgmt track miss not always 0
   assign transmitter_refill_way_o = mgmt_v_i ? mgmt_chosen_way_i : mhu_refill_way_i;
-  assign transmitter_refill_addr_index_o = mgmt_v_i ? addr_v_i[block_offset_width_lp+:lg_sets_lp] : mhu_refill_addr_index_i;
+  assign transmitter_refill_addr_index_o = mgmt_v_i ? ((sets_p > 1) ? addr_v_i[block_offset_width_lp+:lg_sets_lp] : 1'b0) : mhu_refill_addr_index_i;
   assign transmitter_refill_mshr_data_byte_mask_o = mgmt_v_i ? '0 : mshr_data_byte_mask_r;
   assign transmitter_refill_done_o = transmitter_refill_done_r;
   assign dma_refill_data_out_to_sipo_counter_o = dma_refill_data_out_to_sipo_counter_r;
