@@ -8,7 +8,7 @@ which describes the design and usage.
 
 Please also see the [BSG SystemVerilog Style Guide](https://docs.google.com/document/d/1xA5XUzBtz_D6aSyIBQUwFk_kSUdckrfxa2uzGjMgmCU/edit#) which describes many of the conventions used in this library, including the variants of the valid/ready handshaking protocols.
 
-Note: bsg_misc/bsg_defines.v contains many macros used by BaseJump STL. Make sure it is in your include path.
+Note: bsg_misc/bsg_defines.sv contains many macros used by BaseJump STL. Make sure it is in your include path.
 
 ## Contents
 
@@ -49,10 +49,14 @@ Unidirectional off-chip high-speed source synchronous communication interface. (
 
 Open source portable clock generator (all-standard cell)
 
+* bsg_tag
+
+High speed SPI-like interface for configuration state
+
 * bsg_dmc
 
 LPDDR1 Dram Controller and PHY.
-Requires advanced knowledge to tapeout.
+Requires advanced knowledge to tapeout. Still experimental.
  
 * bsg_test
 
@@ -60,11 +64,20 @@ Data, clock, and reset generator for test benches.
 
 * testing
 
+
 Mirrors the other directories, with tests.
+
+* experimental
+
+Meaty blocks that are potentially useful but may require additional verificaiton.  With further iteration, they may be promoted out of experimental.
 
 * hard
 
 Mirrors other directories, contains replacement files for specific process technologies.
+
+## Example Usage
+
+Example usage of these modules can be found in the [HammerBlade manycore repository](https://github.com/bespoke-silicon-group/bsg_manycore), the [BlackParrot Repository](https://github.com/black-parrot/black-parrot) and the [Basejump STL Testing](https://github.com/bespoke-silicon-group/basejump_stl/tree/master/testing) repository.
 
 ## Contact
 

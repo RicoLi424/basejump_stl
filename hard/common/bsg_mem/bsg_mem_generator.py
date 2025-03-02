@@ -6,8 +6,8 @@ import json
 import os
 
 bsg_mem_1r1w_sync_template = """
-  `include "bsg_defines.v"
-  `include "bsg_mem_1r1w_sync_macros.vh"
+  `include "bsg_defines.sv"
+  `include "bsg_mem_1r1w_sync_macros.svh"
 
   module bsg_mem_1r1w_sync
     #(parameter `BSG_INV_PARAM(width_p)
@@ -33,7 +33,7 @@ bsg_mem_1r1w_sync_template = """
       , output logic [`BSG_SAFE_MINUS(width_p,1):0] r_data_o
     );
 
-    // synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
     initial begin
       if (latch_last_read_p && !{latch_last_read_en})
         $error("BSG ERROR: latch_last_read_p is set but unsupported");
@@ -44,7 +44,7 @@ bsg_mem_1r1w_sync_template = """
       if (disable_collision_warning_p && !{disable_collision_warning_en})
         $warning("BSG ERROR: disable_collision_warning_p is set but unsupported");
     end
-    // synopsys translate_on
+`endif
 
     if (0) begin end else
     // Hardened macro selections
@@ -58,12 +58,12 @@ bsg_mem_1r1w_sync_template = """
       ) synth (.*);
     end
 
-    //synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
       initial
         begin
            $display("## %L: instantiating width_p=%d, els_p=%d (%m)", width_p, els_p);
         end
-    //synopsys translate_on
+`endif
 
   endmodule
 
@@ -71,8 +71,8 @@ bsg_mem_1r1w_sync_template = """
 """
 
 bsg_mem_1r1w_sync_mask_write_bit_template = """
-  `include "bsg_defines.v"
-  `include "bsg_mem_1r1w_sync_mask_write_bit_macros.vh"
+  `include "bsg_defines.sv"
+  `include "bsg_mem_1r1w_sync_mask_write_bit_macros.svh"
 
   module bsg_mem_1r1w_sync_mask_write_bit
     #(parameter `BSG_INV_PARAM(width_p)
@@ -99,7 +99,7 @@ bsg_mem_1r1w_sync_mask_write_bit_template = """
       , output logic [`BSG_SAFE_MINUS(width_p,1):0] r_data_o
     );
 
-    // synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
     initial begin
       if (latch_last_read_p && !{latch_last_read_en})
         $error("BSG ERROR: latch_last_read_p is set but unsupported");
@@ -110,7 +110,7 @@ bsg_mem_1r1w_sync_mask_write_bit_template = """
       if (disable_collision_warning_p && !{disable_collision_warning_en})
         $warning("BSG ERROR: disable_collision_warning_p is set but unsupported");
     end
-    // synopsys translate_on
+`endif
 
     if (0) begin end else
     // Hardened macro selections
@@ -124,12 +124,12 @@ bsg_mem_1r1w_sync_mask_write_bit_template = """
       ) synth (.*);
     end
 
-    //synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
       initial
         begin
            $display("## %L: instantiating width_p=%d, els_p=%d (%m)", width_p, els_p);
         end
-    //synopsys translate_on
+`endif
 
   endmodule
 
@@ -137,8 +137,8 @@ bsg_mem_1r1w_sync_mask_write_bit_template = """
 """
 
 bsg_mem_1r1w_sync_mask_write_byte_template = """
-  `include "bsg_defines.v"
-  `include "bsg_mem_1r1w_sync_mask_write_byte_macros.vh"
+  `include "bsg_defines.sv"
+  `include "bsg_mem_1r1w_sync_mask_write_byte_macros.svh"
 
   module bsg_mem_1r1w_sync_mask_write_byte
     #(parameter `BSG_INV_PARAM(width_p)
@@ -166,7 +166,7 @@ bsg_mem_1r1w_sync_mask_write_byte_template = """
       , output logic [`BSG_SAFE_MINUS(width_p,1):0] r_data_o
     );
 
-    // synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
     initial begin
       if (latch_last_read_p && !{latch_last_read_en})
         $error("BSG ERROR: latch_last_read_p is set but unsupported");
@@ -177,7 +177,7 @@ bsg_mem_1r1w_sync_mask_write_byte_template = """
       if (disable_collision_warning_p && !{disable_collision_warning_en})
         $warning("BSG ERROR: disable_collision_warning_p is set but unsupported");
     end
-    // synopsys translate_on
+`endif
 
     if (0) begin end else
     // Hardened macro selections
@@ -191,12 +191,12 @@ bsg_mem_1r1w_sync_mask_write_byte_template = """
       ) synth (.*);
     end
 
-    //synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
       initial
         begin
            $display("## %L: instantiating width_p=%d, els_p=%d (%m)", width_p, els_p);
         end
-    //synopsys translate_on
+`endif
 
   endmodule
 
@@ -204,8 +204,8 @@ bsg_mem_1r1w_sync_mask_write_byte_template = """
 """
 
 bsg_mem_1rw_sync_template = """
-  `include "bsg_defines.v"
-  `include "bsg_mem_1rw_sync_macros.vh"
+  `include "bsg_defines.sv"
+  `include "bsg_mem_1rw_sync_macros.svh"
 
 module bsg_mem_1rw_sync #(parameter `BSG_INV_PARAM(width_p)
                           , parameter `BSG_INV_PARAM(els_p)
@@ -224,14 +224,14 @@ module bsg_mem_1rw_sync #(parameter `BSG_INV_PARAM(width_p)
     , output logic [`BSG_SAFE_MINUS(width_p,1):0]  data_o
     );
 
-    // synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
     initial begin
       if (latch_last_read_p && !{latch_last_read_en})
         $error("BSG ERROR: latch_last_read_p is set but unsupported");
       if (enable_clock_gating_p && !{enable_clock_gating_en})
         $error("BSG ERROR: enable_clock_gating_p is set but unsupported");
     end
-    // synopsys translate_on
+`endif
 
     if (0) begin end else
     // Hardened macro selections
@@ -244,20 +244,20 @@ module bsg_mem_1rw_sync #(parameter `BSG_INV_PARAM(width_p)
       ) synth (.*);
     end
 
-    //synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
       initial
         begin
            $display("## %L: instantiating width_p=%d, els_p=%d (%m)", width_p, els_p);
         end
-    //synopsys translate_on
+`endif
 
 endmodule
 """
 
 bsg_mem_1rw_sync_mask_write_bit_template = """
 
-  `include "bsg_defines.v"
-  `include "bsg_mem_1rw_sync_mask_write_bit_macros.vh"
+  `include "bsg_defines.sv"
+  `include "bsg_mem_1rw_sync_mask_write_bit_macros.svh"
 
 module bsg_mem_1rw_sync_mask_write_bit #(parameter `BSG_INV_PARAM(width_p)
                           , parameter `BSG_INV_PARAM(els_p)
@@ -276,14 +276,14 @@ module bsg_mem_1rw_sync_mask_write_bit #(parameter `BSG_INV_PARAM(width_p)
     , output logic [`BSG_SAFE_MINUS(width_p,1):0]  data_o
     );
 
-    // synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
     initial begin
       if (latch_last_read_p && !{latch_last_read_en})
         $error("BSG ERROR: latch_last_read_p is set but unsupported");
       if (enable_clock_gating_p && !{enable_clock_gating_en})
         $error("BSG ERROR: enable_clock_gating_p is set but unsupported");
     end
-    // synopsys translate_on
+`endif
 
     if (0) begin end else
     // Hardened macro selections
@@ -296,20 +296,20 @@ module bsg_mem_1rw_sync_mask_write_bit #(parameter `BSG_INV_PARAM(width_p)
       ) synth (.*);
     end
 
-    //synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
       initial
         begin
            $display("## %L: instantiating width_p=%d, els_p=%d (%m)", width_p, els_p);
         end
-    //synopsys translate_on
+`endif
 
 endmodule
 """
 
 bsg_mem_1rw_sync_mask_write_byte_template = """
 
-  `include "bsg_defines.v"
-  `include "bsg_mem_1rw_sync_mask_write_byte_macros.vh"
+  `include "bsg_defines.sv"
+  `include "bsg_mem_1rw_sync_mask_write_byte_macros.svh"
 
 module bsg_mem_1rw_sync_mask_write_byte #(parameter `BSG_INV_PARAM(data_width_p)
                           , parameter `BSG_INV_PARAM(els_p)
@@ -329,14 +329,14 @@ module bsg_mem_1rw_sync_mask_write_byte #(parameter `BSG_INV_PARAM(data_width_p)
     , output logic [`BSG_SAFE_MINUS(data_width_p,1):0]  data_o
     );
 
-    // synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
     initial begin
       if (latch_last_read_p && !{latch_last_read_en})
         $error("BSG ERROR: latch_last_read_p is set but unsupported");
       if (enable_clock_gating_p && !{enable_clock_gating_en})
         $error("BSG ERROR: enable_clock_gating_p is set but unsupported");
     end
-    // synopsys translate_on
+`endif
 
     if (0) begin end else
     // Hardened macro selections
@@ -349,18 +349,18 @@ module bsg_mem_1rw_sync_mask_write_byte #(parameter `BSG_INV_PARAM(data_width_p)
       ) synth (.*);
     end
 
-    //synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
       initial
         begin
            $display("## %L: instantiating data_width_p=%d, els_p=%d (%m)", data_width_p, els_p);
         end
-    //synopsys translate_on
+`endif
 endmodule
 """
 
 bsg_mem_2r1w_sync_template = """
-  `include "bsg_defines.v"
-  `include "bsg_mem_2r1w_sync_macros.vh"
+  `include "bsg_defines.sv"
+  `include "bsg_mem_2r1w_sync_macros.svh"
 
   module bsg_mem_2r1w_sync
     #(parameter `BSG_INV_PARAM(width_p)
@@ -387,14 +387,14 @@ bsg_mem_2r1w_sync_template = """
       , output logic [`BSG_SAFE_MINUS(width_p,1):0] r1_data_o
     );
 
-    // synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
     initial begin
       if (read_write_same_addr_p && !{read_write_same_addr_en})
         $error("BSG ERROR: read_write_same_addr_p is set but unsupported");
       if (enable_clock_gating_p && !{enable_clock_gating_en})
         $error("BSG ERROR: enable_clock_gating_p is set but unsupported");
     end
-    // synopsys translate_on
+`endif
 
     if (0) begin end else
     // Hardened macro selections
@@ -407,12 +407,12 @@ bsg_mem_2r1w_sync_template = """
       ) synth (.*);
     end
 
-    //synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
       initial
         begin
            $display("## %L: instantiating width_p=%d, els_p=%d (%m)", width_p, els_p);
         end
-    //synopsys translate_on
+`endif
 
   endmodule
 
@@ -420,8 +420,8 @@ bsg_mem_2r1w_sync_template = """
 """
 
 bsg_mem_2rw_sync_template = """
-  `include "bsg_defines.v"
-  `include "bsg_mem_2rw_sync_macros.vh"
+  `include "bsg_defines.sv"
+  `include "bsg_mem_2rw_sync_macros.svh"
 
   module bsg_mem_2rw_sync
     #(parameter `BSG_INV_PARAM(width_p)
@@ -449,7 +449,7 @@ bsg_mem_2rw_sync_template = """
   , output logic [`BSG_SAFE_MINUS(width_p,1):0] b_data_o
   );
 
-    // synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
     initial begin
       if (read_write_same_addr_p && !{read_write_same_addr_en})
         $error("BSG ERROR: read_write_same_addr_p is set but unsupported");
@@ -458,7 +458,7 @@ bsg_mem_2rw_sync_template = """
       if (disable_collision_warning_p && !{disable_collision_warning_en})
         $warning("BSG ERROR: disable_collision_warning_p is set but unsupported");
     end
-    // synopsys translate_on
+`endif
 
     if (0) begin end else
     // Hardened macro selections
@@ -471,12 +471,12 @@ bsg_mem_2rw_sync_template = """
       ) synth (.*);
     end
 
-    //synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
       initial
         begin
            $display("## %L: instantiating width_p=%d, els_p=%d (%m)", width_p, els_p);
         end
-    //synopsys translate_on
+`endif
 
   endmodule
 
@@ -484,8 +484,8 @@ bsg_mem_2rw_sync_template = """
 """
 
 bsg_mem_2rw_sync_mask_write_bit_template = """
-  `include "bsg_defines.v"
-  `include "bsg_mem_2rw_sync_mask_write_bit_macros.vh"
+  `include "bsg_defines.sv"
+  `include "bsg_mem_2rw_sync_mask_write_bit_macros.svh"
 
   module bsg_mem_2rw_sync_mask_write_bit
     #(parameter `BSG_INV_PARAM(width_p)
@@ -515,7 +515,7 @@ bsg_mem_2rw_sync_mask_write_bit_template = """
   , output logic [`BSG_SAFE_MINUS(width_p,1):0] b_data_o
   );
 
-    // synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
     initial begin
       if (read_write_same_addr_p && !{read_write_same_addr_en})
         $error("BSG ERROR: read_write_same_addr_p is set but unsupported");
@@ -524,7 +524,7 @@ bsg_mem_2rw_sync_mask_write_bit_template = """
       if (disable_collision_warning_p && !{disable_collision_warning_en})
         $warning("BSG ERROR: disable_collision_warning_p is set but unsupported");
     end
-    // synopsys translate_on
+`endif
 
     if (0) begin end else
     // Hardened macro selections
@@ -537,12 +537,12 @@ bsg_mem_2rw_sync_mask_write_bit_template = """
       ) synth (.*);
     end
 
-    //synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
       initial
         begin
            $display("## %L: instantiating width_p=%d, els_p=%d (%m)", width_p, els_p);
         end
-    //synopsys translate_on
+`endif
 
   endmodule
 
@@ -550,8 +550,8 @@ bsg_mem_2rw_sync_mask_write_bit_template = """
 """
 
 bsg_mem_2rw_sync_mask_write_byte_template = """
-  `include "bsg_defines.v"
-  `include "bsg_mem_2rw_sync_mask_write_byte_macros.vh"
+  `include "bsg_defines.sv"
+  `include "bsg_mem_2rw_sync_mask_write_byte_macros.svh"
 
   module bsg_mem_2rw_sync_mask_write_byte
     #(parameter `BSG_INV_PARAM(width_p)
@@ -582,7 +582,7 @@ bsg_mem_2rw_sync_mask_write_byte_template = """
   , output logic [`BSG_SAFE_MINUS(width_p,1):0] b_data_o
   );
 
-    // synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
     initial begin
       if (read_write_same_addr_p && !{read_write_same_addr_en})
         $error("BSG ERROR: read_write_same_addr_p is set but unsupported");
@@ -591,7 +591,7 @@ bsg_mem_2rw_sync_mask_write_byte_template = """
       if (disable_collision_warning_p && !{disable_collision_warning_en})
         $warning("BSG ERROR: disable_collision_warning_p is set but unsupported");
     end
-    // synopsys translate_on
+`endif
 
     if (0) begin end else
     // Hardened macro selections
@@ -604,12 +604,12 @@ bsg_mem_2rw_sync_mask_write_byte_template = """
       ) synth (.*);
     end
 
-    //synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
       initial
         begin
            $display("## %L: instantiating width_p=%d, els_p=%d (%m)", width_p, els_p);
         end
-    //synopsys translate_on
+`endif
 
   endmodule
 
@@ -617,8 +617,8 @@ bsg_mem_2rw_sync_mask_write_byte_template = """
 """
 
 bsg_mem_3r1w_sync_template = """
-  `include "bsg_defines.v"
-  `include "bsg_mem_3r1w_sync_macros.vh"
+  `include "bsg_defines.sv"
+  `include "bsg_mem_3r1w_sync_macros.svh"
 
   module bsg_mem_3r1w_sync
     #(parameter `BSG_INV_PARAM(width_p)
@@ -649,14 +649,14 @@ bsg_mem_3r1w_sync_template = """
       , output logic [`BSG_SAFE_MINUS(width_p,1):0] r2_data_o
     );
 
-    // synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
     initial begin
       if (read_write_same_addr_p && !{read_write_same_addr_en})
         $error("BSG ERROR: read_write_same_addr_p is set but unsupported");
       if (enable_clock_gating_p && !{enable_clock_gating_en})
         $error("BSG ERROR: enable_clock_gating_p is set but unsupported");
     end
-    // synopsys translate_on
+`endif
 
     if (0) begin end else
     // Hardened macro selections
@@ -669,12 +669,12 @@ bsg_mem_3r1w_sync_template = """
       ) synth (.*);
     end
 
-    //synopsys translate_off
+`ifndef BSG_HIDE_FROM_SYNTHESIS
       initial
         begin
            $display("## %L: instantiating width_p=%d, els_p=%d (%m)", width_p, els_p);
         end
-    //synopsys translate_on
+`endif
 
   endmodule
 

@@ -107,7 +107,7 @@ except:
     sys.exit()
 
 print ("""// Round robin arbitration unit
-// NOTE: generally prefer https://github.com/bespoke-silicon-group/basejump_stl/blob/master/bsg_misc/bsg_arb_round_robin.v to this module.
+// NOTE: generally prefer https://github.com/bespoke-silicon-group/basejump_stl/blob/master/bsg_misc/bsg_arb_round_robin.sv to this module.
 // Automatically generated using bsg_round_robin_arb.py
 // DO NOT MODIFY
 
@@ -121,11 +121,11 @@ print ("""// Round robin arbitration unit
 //                in some typical use cases, grants_en_i comes from a downstream consumer to indicate readiness;
 //                this can be used with v_o to implement ready/valid protocol at both producer (fed into yumi_i) and consumer
 
-`include "bsg_defines.v"
+`include "bsg_defines.sv"
 
 """)
 
-print ("""module bsg_round_robin_arb #(`BSG_INV_PARAM(inputs_p)
+print ("""module bsg_round_robin_arb #(parameter `BSG_INV_PARAM(inputs_p)
                                      ,lg_inputs_p   =`BSG_SAFE_CLOG2(inputs_p)
                                      ,reset_on_sr_p = 1'b0
                                      ,hold_on_sr_p  = 1'b0
@@ -160,6 +160,18 @@ logic [lg_inputs_p-1:0] last, last_n, last_r;
 logic hold_on_sr, reset_on_sr;
 
 """)
+
+print ("""
+// synopsys translate_off
+initial begin
+assert (inputs_p <= """,max_reqs,""")
+  else begin
+    $error("[%m] Can not support inputs_p greater than """,max_reqs,""". You can regenerate bsg_round_robin_arb.sv with a greater input range.\");
+    $finish();
+  end
+end
+// synopsys translate_on
+""") 
 
 for reqs_w in range(1, max_reqs+1):
     print ("""
@@ -208,6 +220,7 @@ assign grants_o      = sel_one_hot_n & {%d{grants_en_i}} ;
     print ("""
 end: inputs_%d""" % (reqs_w))
 
+print ("// if (inputs_p > ",max_reqs,") initial begin $error(\"unhandled number of inputs\"); end");
 print ("""
 
 assign v_o = | reqs_i ;
@@ -221,7 +234,7 @@ else
         last_n = hold_on_sr ? last_r :
                ( yumi_i     ? tag_o  : last_r );  
       end else if( reset_on_sr_p ) begin: reset_on_last_n_gen
-        last_n = reset_on_sr? (inputs_p-2) :
+        last_n = reset_on_sr? (inputs_p-2'd2) :
                ( yumi_i     ?tag_o : last_r );  
       end else if( hold_on_valid_p ) begin: hold_on_last_n_gen
         // Need to manually handle wrap around on non-power of two case, else reuse subtraction
