@@ -38,7 +38,7 @@ DMA_REQ_DELAY_P   ?= 0
 DMA_DATA_DELAY_P  ?= 0
 WORD_TRACKING_P   ?= 1
 
-NUM_DMA_P ?= 3 # 2-4
+NUM_DMA_P ?= 4 # 2-4
 DMA_RATIO_P ?= 1 # 1-4
 
 VCS_DEFINES += +define+YUMI_MIN_DELAY_P=$(YUMI_MIN_DELAY_P)
@@ -77,6 +77,9 @@ out/%/trace.tr:
 
 %.basic.run: simv out/%/trace.tr
 	(cd out/$*; $(SIMV) -reportstats +vcs+nostdout +wave=$(WAVE) +checker=basic -l simv.log)
+
+# %.basic.run: simv out/%/trace.tr
+# 	(cd out/$*; $(SIMV) +wave=$(WAVE) +checker=basic -l simv.log)
 
 %.dve:
 	$(DVE) -full64 -vpd out/$*/vcdplus.vpd &

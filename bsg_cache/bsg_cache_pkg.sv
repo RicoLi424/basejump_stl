@@ -141,30 +141,45 @@ package bsg_cache_pkg;
 
   // cache dma wormhole opcode
   // This opcode is included in the cache DMA wormhole header flit.
-  typedef enum logic [2:0] {
-    // len = 1
-    // header + addr
-    e_cache_wh_read = 3'b000
+  // typedef enum logic [2:0] {
+  //   // len = 1
+  //   // header + addr
+  //   e_cache_wh_read = 3'b000
 
+  //   // len = 1
+  //   // header + addr
+  //   ,e_cache_wh_write_validate = 3'b001
+
+  //   // len = 1 + (# data flits)
+  //   // header + addr + data
+  //   ,e_cache_wh_write_non_masked = 3'b010
+
+  //   // len = 2 + (# data flits)
+  //   // header + addr + mask + data
+  //   ,e_cache_wh_write_masked = 3'b011
+
+  //   // len = 1
+  //   // header + addr 
+  //   ,e_cache_wh_io_read = 3'b100
+
+  //   // len = 1 + (# data flits)
+  //   // header + addr + data
+  //   ,e_cache_wh_io_write = 3'b101
+  // } bsg_cache_wh_opcode_e;
+
+  typedef enum logic [1:0] {
     // len = 1
     // header + addr
-    ,e_cache_wh_write_validate = 3'b001
+    e_cache_wh_read = 2'b00
 
     // len = 1 + (# data flits)
     // header + addr + data
-    ,e_cache_wh_write_non_masked = 3'b010
+    ,e_cache_wh_write_non_masked = 2'b01
 
     // len = 2 + (# data flits)
     // header + addr + mask + data
-    ,e_cache_wh_write_masked = 3'b011
+    ,e_cache_wh_write_masked = 2'b11
 
-    // len = 1
-    // header + addr 
-    ,e_cache_wh_io_read = 3'b100
-
-    // len = 1 + (# data flits)
-    // header + addr + data
-    ,e_cache_wh_io_write = 3'b101
   } bsg_cache_wh_opcode_e;
 
 endpackage

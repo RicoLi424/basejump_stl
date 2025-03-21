@@ -57,5 +57,5 @@ $BASEJUMP_STL_DIR/bsg_misc/bsg_dff_reset.sv
 ../common/bsg_nonsynth_dma_model.sv
 ../common/bsg_nonsynth_random_yumi_gen.sv
 ../common/basic_checker_32.sv
-bsg_tag_mem_copy.sv
+bsg_tag_mem_check.sv
 testbench.sv
