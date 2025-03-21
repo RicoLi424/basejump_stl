@@ -472,8 +472,9 @@ module bsg_cache_dma
   always_ff @ (posedge clk_i) begin
     if (debug_p) begin
       if (dma_pkt_v_o & dma_pkt_yumi_i) begin
-        $display("<VCACHE> DMA_PKT we:%0d addr:%8h // %8t",
-          dma_pkt.write_not_read, dma_pkt.addr, $time);
+        $display("<VCACHE> DMA_PKT we:%0d addr:%8h wv:%0d rp:%0d unc:%0d // %8t",
+          dma_pkt.write_not_read, dma_pkt.addr, dma_pkt.write_validate, 
+          dma_pkt.read_pending, dma_pkt.uncached_op, $time);
       end
     end
   end

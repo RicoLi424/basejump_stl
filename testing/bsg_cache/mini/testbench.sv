@@ -98,7 +98,7 @@ module testbench();
         ,.block_size_in_words_p(block_size_in_words_p)
         ,.sets_p(sets_p)
         ,.ways_p(ways_p)
-        ,.word_tracking_p(0)
+        ,.word_tracking_p(1)
         ,.amo_support_p(amo_support_level_arithmetic_lp)
       ) cache (
         .clk_i(clk)
@@ -169,15 +169,17 @@ module testbench();
          ,.wh_link_sif_o(wh_link_sif_lo[i])
 
          ,.my_wh_cord_i('0)
-         ,.dest_wh_cord_i('1)
+         ,.dest_wh_cord_i({wh_cord_width_p{1'b1}})
          ,.my_wh_cid_i(wh_cid_width_p'(i))
-         ,.dest_wh_cid_i({wh_cord_width_p{1'b1}})
+         ,.dest_wh_cid_i(wh_cid_width_p'(i))
          ,.io_wh_cord_i({{(wh_cord_width_p-1){1'b1}},1'b0})
          );
     end
 
-
   bsg_ready_and_link_sif_s wh_link_concentrated_li, wh_link_concentrated_lo;
+  bsg_ready_and_link_sif_s wh_link_concentrated_lo_filtered;
+  bsg_ready_and_link_sif_s wh_link_wh2dma_lo;
+
   bsg_wormhole_concentrator
    #(.flit_width_p(wh_flit_width_p)
      ,.len_width_p(wh_len_width_p)
@@ -196,87 +198,258 @@ module testbench();
      ,.concentrated_link_o(wh_link_concentrated_lo)
      );
 
-
-  `declare_bsg_cache_wh_header_flit_s(wh_flit_width_p,wh_cord_width_p,wh_len_width_p,wh_cid_width_p);
-  bsg_cache_wh_header_flit_s header_flit;
+ `declare_bsg_cache_wh_header_flit_s(wh_flit_width_p,wh_cord_width_p,wh_len_width_p,wh_cid_width_p);
+  bsg_cache_wh_header_flit_s header_flit, io_read_header_flit_back;
   assign header_flit = wh_link_concentrated_lo.data;
 
+  `declare_bsg_cache_wh_notify_info_s(wh_flit_width_p,wh_cord_width_p,wh_len_width_p,wh_cid_width_p,ways_p);
+  bsg_cache_wh_notify_info_s notify_info, notify_info_n, notify_info_r;
+  assign notify_info = header_flit.unused;
+
+  bsg_cache_wh_opcode_e wh_opcode_r, wh_opcode_n;
+
+  typedef enum logic [2:0] {
+    TRANS_RESET
+    , TRANS_READY
+    , TRANS_COUNT
+    , TRANS_IO_READ_REPLY_WAIT
+    , TRANS_IO_READ_REPLY_READY
+    , TRANS_IO_READ_REPLY_SEND
+  } trans_state_e;
+
+  trans_state_e trans_state_r, trans_state_n;
+
+  localparam max_count_width_lp = `BSG_SAFE_CLOG2(data_len_p+2);
+  logic trans_clear_li;
+  logic trans_up_li;
+  logic [max_count_width_lp-1:0] trans_count_lo;
+  logic [max_count_width_lp-1:0] cnt_max_r, cnt_max_n;
+  logic [wh_cord_width_p-1:0] src_cord_r, src_cord_n;
+  logic [wh_cid_width_p-1:0] src_cid_r, src_cid_n;
+  logic wh_link_concentrated_yumi_li;
+
+  bsg_counter_clear_up #(
+    .max_val_p(data_len_p+2-1)
+    ,.init_val_p(0)
+  ) trans_count (
+    .clk_i(clk)
+    ,.reset_i(reset)
+    ,.clear_i(trans_clear_li)
+    ,.up_i(trans_up_li)
+    ,.count_o(trans_count_lo)
+  );
+
+  always_comb begin
+    trans_state_n = trans_state_r;
+    trans_clear_li = 1'b0;
+    trans_up_li = 1'b0;
+    cnt_max_n = cnt_max_r;
+    wh_opcode_n = wh_opcode_r;
+
+    wh_link_concentrated_li = wh_link_wh2dma_lo;
+
+    src_cord_n = src_cord_r;
+    src_cid_n = src_cid_r;
+
+    notify_info_n = notify_info_r;
+
+    wh_link_concentrated_yumi_li = 1'b0;
+
+    io_read_header_flit_back.unused = '0;
+    io_read_header_flit_back.opcode = e_cache_wh_read; // doesn't matter
+    io_read_header_flit_back.src_cord = '0; // doesn't matter
+    io_read_header_flit_back.src_cid = '0; // doesn't matter
+    io_read_header_flit_back.len = 1; // only send one packet back for io read data reply
+    io_read_header_flit_back.cord = src_cord_r;
+    io_read_header_flit_back.cid = src_cid_r;
+
+    case (trans_state_r)
+      TRANS_RESET: begin
+        trans_state_n = TRANS_READY;
+      end
+
+      TRANS_READY: begin
+        wh_link_concentrated_yumi_li = wh_link_concentrated_lo.v & 
+                                       ((notify_info.io_op || notify_info.write_validate)
+                                        ? 1'b1
+                                        : wh_link_wh2dma_lo.ready_and_rev);
+
+        wh_link_concentrated_li.v = wh_link_wh2dma_lo.v;
+        wh_link_concentrated_li.data = wh_link_wh2dma_lo.data;
+        wh_link_concentrated_li.ready_and_rev = wh_link_concentrated_yumi_li;
+
+        notify_info_n = (wh_link_concentrated_lo.v & wh_link_concentrated_yumi_li)
+                      ? notify_info
+                      : notify_info_r;
+
+        cnt_max_n = (wh_link_concentrated_lo.v & wh_link_concentrated_yumi_li)
+                  ? ((header_flit.opcode == e_cache_wh_read) 
+                    ? 1      // regular read, io read, write validate notification
+                    : ((header_flit.opcode == e_cache_wh_write_non_masked)
+                      ? (notify_info.io_op 
+                        ? 2   // io write
+                        : (1 + data_len_p))  // regular non-masked write
+                      : (2 + data_len_p)))   // regular masked write
+                  : cnt_max_r;
+
+        src_cid_n = (wh_link_concentrated_lo.v & wh_link_concentrated_yumi_li) ? header_flit.src_cid : src_cid_r;
+        src_cord_n =(wh_link_concentrated_lo.v & wh_link_concentrated_yumi_li) ? header_flit.src_cord : src_cord_r;
+
+        wh_opcode_n = (wh_link_concentrated_lo.v & wh_link_concentrated_yumi_li) ? header_flit.opcode : wh_opcode_r;
+
+        trans_state_n = (wh_link_concentrated_lo.v & wh_link_concentrated_yumi_li)
+          ? TRANS_COUNT
+          : TRANS_READY;
+      end
+
+      TRANS_COUNT: begin
+        wh_link_concentrated_yumi_li = wh_link_concentrated_lo.v & 
+                                       ((notify_info_r.io_op || notify_info_r.write_validate)
+                                        ? 1'b1
+                                        : wh_link_wh2dma_lo.ready_and_rev);
+
+        wh_link_concentrated_li.v = wh_link_wh2dma_lo.v;
+        wh_link_concentrated_li.data = wh_link_wh2dma_lo.data;
+        wh_link_concentrated_li.ready_and_rev = wh_link_concentrated_yumi_li;
+
+        trans_up_li = (trans_count_lo != (cnt_max_r-1)) & wh_link_concentrated_lo.v & wh_link_concentrated_yumi_li;
+        trans_clear_li = (trans_count_lo == (cnt_max_r-1)) & wh_link_concentrated_lo.v & wh_link_concentrated_yumi_li;
+        trans_state_n = trans_clear_li
+                      ? (((wh_opcode_r == e_cache_wh_read) & notify_info_r.io_op)
+                        ? (((wh2dma.recv_state_r == 2'b01) || (wh2dma.recv_state_n == 2'b01))
+                          ? TRANS_IO_READ_REPLY_READY
+                          : TRANS_IO_READ_REPLY_WAIT)
+                        : TRANS_READY)
+                      : TRANS_COUNT;
+      end
+
+      TRANS_IO_READ_REPLY_WAIT: begin
+        wh_link_concentrated_li.v = wh_link_wh2dma_lo.v;
+        wh_link_concentrated_li.data = wh_link_wh2dma_lo.data;
+        wh_link_concentrated_li.ready_and_rev = 1'b0;
+
+        trans_state_n = (wh2dma.recv_state_n == 2'b01) ? TRANS_IO_READ_REPLY_READY : TRANS_IO_READ_REPLY_WAIT;
+      end
+
+      TRANS_IO_READ_REPLY_READY: begin
+        wh_link_concentrated_li.v = 1'b1;
+        wh_link_concentrated_li.data = io_read_header_flit_back;
+        wh_link_concentrated_li.ready_and_rev = 1'b0;
+        trans_state_n = wh_link_concentrated_lo.ready_and_rev
+          ? TRANS_IO_READ_REPLY_SEND
+          : TRANS_IO_READ_REPLY_READY;
+      end
+
+      TRANS_IO_READ_REPLY_SEND: begin
+        wh_link_concentrated_li.v = 1'b1;
+        wh_link_concentrated_li.data = wh_flit_width_p'({1'b0});
+        wh_link_concentrated_li.ready_and_rev = 1'b0;
+        trans_state_n = wh_link_concentrated_lo.ready_and_rev ? TRANS_READY : TRANS_IO_READ_REPLY_SEND;
+      end
+
+      default: begin
+        trans_state_n = TRANS_READY;
+      end
+    endcase
+  end
 
 
+  // for write validate notification and io read/write, the wh packets don't go into wh_to_dma
+  assign wh_link_concentrated_lo_filtered.data = header_flit;
+  assign wh_link_concentrated_lo_filtered.ready_and_rev = (((trans_state_n == TRANS_IO_READ_REPLY_READY) && (wh2dma.recv_state_r == 2'b01))
+                                                          || (trans_state_r == TRANS_IO_READ_REPLY_READY) 
+                                                          || (trans_state_r == TRANS_IO_READ_REPLY_SEND))
+                                                        ? 1'b0
+                                                        : wh_link_concentrated_lo.ready_and_rev;
+  // assign wh_link_concentrated_lo_filtered.v = (((trans_state_r == TRANS_COUNT) 
+  //                                              && ((wh_opcode_r == e_cache_wh_read)
+  //                                                 || (wh_opcode_r == e_cache_wh_write_non_masked)
+  //                                                 || (wh_opcode_r == e_cache_wh_write_masked)))
+  //                                             || ((trans_state_r == TRANS_READY) 
+  //                                               && ((header_flit.opcode == e_cache_wh_read)
+  //                                                 || (header_flit.opcode == e_cache_wh_write_non_masked) 
+  //                                                 || (header_flit.opcode == e_cache_wh_write_masked))))
+  //                                            && wh_link_concentrated_lo.v
+  //                                           ? 1'b1
+  //                                           : 1'b0;
 
-//   bsg_cache_dma_pkt_s mem_dma_pkt;
-//   logic mem_dma_pkt_v_lo, mem_dma_pkt_yumi_li;
-//   logic [wh_flit_width_p-1:0] mem_dma_data_li;
-//   logic mem_dma_data_v_li, mem_dma_data_ready_and_lo;
-//   logic [dma_data_width_p-1:0] mem_dma_data_lo;
-//   logic mem_dma_data_v_lo, mem_dma_data_yumi_li;
+  assign wh_link_concentrated_lo_filtered.v = wh_link_concentrated_lo.v &
+                                            (((trans_state_r == TRANS_COUNT) & ~notify_info_r.write_validate & ~notify_info_r.io_op)
+                                            || ((trans_state_r == TRANS_READY) & ~notify_info.write_validate & ~notify_info.io_op));
 
-//   logic [wh_cord_width_p-1:0] wh_header_cord_lo;
-//   logic [wh_cid_width_p-1:0] wh_header_cid_lo;
-//   wire [lg_num_dma_lp-1:0] wh_dma_id_li = header_flit.src_cid[0+:lg_num_dma_lp];
+  bsg_cache_dma_pkt_s mem_dma_pkt;
+  logic mem_dma_pkt_v_lo, mem_dma_pkt_yumi_li;
+  logic [wh_flit_width_p-1:0] mem_dma_data_li;
+  logic mem_dma_data_v_li, mem_dma_data_ready_and_lo;
+  logic [dma_data_width_p-1:0] mem_dma_data_lo;
+  logic mem_dma_data_v_lo, mem_dma_data_yumi_li;
 
-//   bsg_wormhole_to_cache_dma_inorder #(
-//      .num_dma_p(num_dma_p)
-//      ,.dma_addr_width_p(addr_width_p)
-//      ,.dma_burst_len_p(data_len_p)
-//      ,.dma_mask_width_p(block_size_in_words_p)
-//      ,.dma_ways_p(ways_p)
-//      ,.wh_flit_width_p(wh_flit_width_p)
-//      ,.wh_cid_width_p(wh_cid_width_p)
-//      ,.wh_cord_width_p(wh_cord_width_p)
-//      ,.wh_len_width_p(wh_len_width_p)
-//    ) wh2dma (
-//      .clk_i(clk)
-//      ,.reset_i(reset)
+  logic [wh_cord_width_p-1:0] wh_header_cord_lo;
+  logic [wh_cid_width_p-1:0] wh_header_cid_lo;
+  wire [lg_num_dma_lp-1:0] wh_dma_id_li = header_flit.src_cid[0+:lg_num_dma_lp];
 
-//      ,.wh_link_sif_i(wh_link_concentrated_lo)
-//      ,.wh_dma_id_i(wh_dma_id_li)
-//      ,.wh_link_sif_o(wh_link_concentrated_li)
+  bsg_wormhole_to_cache_dma_inorder #(
+     .num_dma_p(num_dma_p)
+     ,.dma_addr_width_p(addr_width_p)
+     ,.dma_burst_len_p(data_len_p)
+     ,.dma_mask_width_p(block_size_in_words_p)
+     ,.dma_ways_p(ways_p)
+     ,.wh_flit_width_p(wh_flit_width_p)
+     ,.wh_cid_width_p(wh_cid_width_p)
+     ,.wh_cord_width_p(wh_cord_width_p)
+     ,.wh_len_width_p(wh_len_width_p)
+   ) wh2dma (
+     .clk_i(clk)
+     ,.reset_i(reset)
 
-//      ,.dma_pkt_o(mem_dma_pkt)
-//      ,.dma_pkt_v_o(mem_dma_pkt_v_lo)
-//      ,.dma_pkt_yumi_i(mem_dma_pkt_yumi_li)
-//      ,.dma_pkt_id_o()
+     ,.wh_link_sif_i(wh_link_concentrated_lo_filtered)
+     ,.wh_dma_id_i(wh_dma_id_li)
+     ,.wh_link_sif_o(wh_link_wh2dma_lo)
 
-//      ,.dma_data_i(mem_dma_data_li)
-//      ,.dma_data_v_i(mem_dma_data_v_li)
-//      ,.dma_data_ready_and_o(mem_dma_data_ready_and_lo)
+     ,.dma_pkt_o(mem_dma_pkt)
+     ,.dma_pkt_v_o(mem_dma_pkt_v_lo)
+     ,.dma_pkt_yumi_i(mem_dma_pkt_yumi_li)
+     ,.dma_pkt_id_o()
 
-//      ,.dma_data_o(mem_dma_data_lo)
-//      ,.dma_data_v_o(mem_dma_data_v_lo)
-//      ,.dma_data_yumi_i(mem_dma_data_yumi_li)
-//   );
+     ,.dma_data_i(mem_dma_data_li)
+     ,.dma_data_v_i(mem_dma_data_v_li)
+     ,.dma_data_ready_and_o(mem_dma_data_ready_and_lo)
+
+     ,.dma_data_o(mem_dma_data_lo)
+     ,.dma_data_v_o(mem_dma_data_v_lo)
+     ,.dma_data_yumi_i(mem_dma_data_yumi_li)
+  );
 
   // DMA model
-//   bsg_nonsynth_dma_model #(
-//     .addr_width_p(addr_width_p)
-//     ,.data_width_p(dma_data_width_p)
-//     ,.block_size_in_words_p(data_len_p)
-//     ,.mask_width_p(block_size_in_words_p)
-//     ,.els_p(mem_size_p)
-//     ,.ways_p(ways_p)
+  bsg_nonsynth_dma_model #(
+    .addr_width_p(addr_width_p)
+    ,.data_width_p(dma_data_width_p)
+    ,.block_size_in_words_p(data_len_p)
+    ,.mask_width_p(block_size_in_words_p)
+    ,.els_p(mem_size_p)
+    ,.ways_p(ways_p)
 
-//     ,.read_delay_p(`DMA_READ_DELAY_P)
-//     ,.write_delay_p(`DMA_WRITE_DELAY_P)
-//     ,.dma_req_delay_p(`DMA_REQ_DELAY_P)
-//     ,.dma_data_delay_p(`DMA_DATA_DELAY_P)
+    ,.read_delay_p(`DMA_READ_DELAY_P)
+    ,.write_delay_p(`DMA_WRITE_DELAY_P)
+    ,.dma_req_delay_p(`DMA_REQ_DELAY_P)
+    ,.dma_data_delay_p(`DMA_DATA_DELAY_P)
 
-//   ) dma0 (
-//     .clk_i(clk)
-//     ,.reset_i(reset)
+  ) dma0 (
+    .clk_i(clk)
+    ,.reset_i(reset)
 
-//     ,.dma_pkt_i(mem_dma_pkt)
-//     ,.dma_pkt_v_i(mem_dma_pkt_v_lo)
-//     ,.dma_pkt_yumi_o(mem_dma_pkt_yumi_li)
+    ,.dma_pkt_i(mem_dma_pkt)
+    ,.dma_pkt_v_i(mem_dma_pkt_v_lo)
+    ,.dma_pkt_yumi_o(mem_dma_pkt_yumi_li)
 
-//     ,.dma_data_o(mem_dma_data_li)
-//     ,.dma_data_v_o(mem_dma_data_v_li)
-//     ,.dma_data_ready_i(mem_dma_data_ready_and_lo)
+    ,.dma_data_o(mem_dma_data_li)
+    ,.dma_data_v_o(mem_dma_data_v_li)
+    ,.dma_data_ready_i(mem_dma_data_ready_and_lo)
 
-//     ,.dma_data_i(mem_dma_data_lo)
-//     ,.dma_data_v_i(mem_dma_data_v_lo)
-//     ,.dma_data_yumi_o(mem_dma_data_yumi_li)
-//   );
+    ,.dma_data_i(mem_dma_data_lo)
+    ,.dma_data_v_i(mem_dma_data_v_lo)
+    ,.dma_data_yumi_o(mem_dma_data_yumi_li)
+  );
 
 
 
@@ -294,7 +467,7 @@ module testbench();
 
   // TODO: SHADOW TAG MODULE
 
-  logic shadow_tag_mem[num_dma_p][sets_p] = '{default: '0};
+  logic [tag_mem_width_lp-1:0] shadow_tag_mem [num_dma_p-1:0][sets_p-1:0] = '{default: '0};
 
   // TODO: PENDING EVICT TABLE
 
@@ -355,77 +528,75 @@ module testbench();
     end
   assign tr_yumi_li = tr_v_lo & |(v_li & ready_lo);
 
-//   bind bsg_cache basic_checker_32 #(
-//     .data_width_p(data_width_p)
-//     ,.addr_width_p(addr_width_p)
-//     ,.mem_size_p($root.testbench.mem_size_p)
-//   ) bc (
-//     .*
-//     ,.en_i($root.testbench.checker == "basic")
-//   );
-
-  logic [tag_mem_width_lp-1:0] tag_mem_copy_lo [num_dma_p][sets_p];
-  
-  for (genvar i = 0; i < num_dma_p; i++) 
-    begin : btag
-      bsg_tag_mem_copy #(
-        .width_p(tag_mem_width_lp)
-        ,.els_p(sets_p)
-      ) tag_mem_cp (
-        .clk_i(clk)
-        ,.reset_i(reset)
-        ,.data_i(cache[i].cache.tag_mem_data_li)
-        ,.data_o(cache[i].cache.tag_mem_data_lo)
-        ,.v_i(cache[i].cache.tag_mem_v_li)
-        ,.w_i(cache[i].cache.tag_mem_w_li)
-        ,.addr_i(cache[i].cache.tag_mem_addr_li)
-        ,.tag_mem_copy_o(tag_mem_copy_lo[i])
-      );
-    end
-
+  bind bsg_cache basic_checker_32 #(
+    .data_width_p(data_width_p)
+    ,.addr_width_p(addr_width_p)
+    ,.mem_size_p($root.testbench.mem_size_p)
+  ) bc (
+    .*
+    ,.en_i($root.testbench.checker == "basic")
+  );
 
   // wait for all responses to be received.
   integer sent_r, recv_r;
+  logic test_done_r;
 
   always_ff @ (posedge clk) begin
     if (reset) begin
       sent_r <= '0;
       recv_r <= '0;
+      trans_state_r <= TRANS_RESET;
+      cnt_max_r <= '0;
+      src_cord_r <= '0;
+      src_cid_r <= '0;
+      wh_opcode_r = e_cache_wh_read;
+      notify_info_r <= '0;
+      test_done_r <= '0;
     end
     else begin
       sent_r <= sent_r + $countones(v_li & ready_lo);
       recv_r <= recv_r + $countones(v_lo & yumi_li);
+      trans_state_r <= trans_state_n;
+      cnt_max_r <= cnt_max_n;
+      src_cord_r <= src_cord_n;
+      src_cid_r <= src_cid_n;
+      wh_opcode_r <= wh_opcode_n;
+      notify_info_r <= notify_info_n;
+      test_done_r <= done & (sent_r == recv_r);
     end
   end
 
-  integer dma_idx, set_idx;
+  logic [tag_mem_width_lp-1:0] tag_mem_copy_lo [num_dma_p][sets_p];
+  
+  for (genvar i = 0; i < num_dma_p; i++) 
+    begin : btag
+      bsg_tag_mem_check #(
+        .width_p(tag_mem_width_lp)
+        ,.sets_p(sets_p)
+        ,.num_dma_p(num_dma_p)
+      ) tag_mem_ck (
+        .clk_i(clk)
+        ,.reset_i(reset)
+        ,.data_i(cache[i].cache.tag_mem_data_li)
+        ,.v_i(cache[i].cache.tag_mem_v_li)
+        ,.w_i(cache[i].cache.tag_mem_w_li)
+        ,.w_mask_i(cache[i].cache.tag_mem_w_mask_li)
+        ,.addr_i(cache[i].cache.tag_mem_addr_li)
+        ,.shadow_tag_mem_i(shadow_tag_mem[i])
+        ,.check_en_i(done & (sent_r == recv_r))
+        ,.id_i(i)
+        // ,.tag_mem_copy_o(tag_mem_copy_lo[i])
+      );
+    end
+
+  // integer dma_idx, set_idx;
   // integer mismatch_count = 0;
 
   initial begin
 
     // TODO: is it sufficient? do we need to check there's no wh packet in dma_to_wormhole or on the link?
-    wait(done & (sent_r == recv_r));
-
-    $display("Starting tag memory comparison for all caches...");
-
-    for (dma_idx = 0; dma_idx < num_dma_p; dma_idx = dma_idx + 1) begin
-      for (set_idx = 0; set_idx < sets_p; set_idx = set_idx + 1) begin
-
-        // TODO:shadow_tag_mem[dma_idx][set_idx] has to be replaced with the actual shadow tag memory data output form
-        assert(shadow_tag_mem[dma_idx][set_idx] == tag_mem_copy_lo[dma_idx][set_idx])
-          else $fatal(1, "ERROR: Mismatch at cache %0d, set %0d: Cache = %h, Shadow = %h", 
-                 dma_idx, set_idx, 
-                 tag_mem_copy_lo[dma_idx][set_idx], 
-                 shadow_tag_mem[dma_idx][set_idx]);
-        //   mismatch_count++;
-      end
-    end
-
-    // if (mismatch_count == 0) begin
-    //   $display("Test PASSED: All shadow tags match cache tags.");
-    // end else begin
-    //   $display("Test FAILED: %0d mismatches detected.", mismatch_count);
-    // end
+    // wait(done & (sent_r == recv_r));
+    wait(test_done_r);
     
     $display("[BSG_FINISH] Test Successful.");
     #500;

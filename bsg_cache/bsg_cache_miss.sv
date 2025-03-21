@@ -538,9 +538,11 @@ module bsg_cache_miss
         dma_fill_then_evict_o = notification_en_i & stat_info_in.dirty[chosen_way_n] & valid_v_i[chosen_way_n];
 
         // if the chosen way is dirty and valid, then evict.
-        miss_state_n = (~notification_en_i | dma_done_i) & (stat_info_in.dirty[chosen_way_n] & valid_v_i[chosen_way_n])
-          ? SEND_EVICT_ADDR
-          : STORE_TAG_MISS_ALLOCATE;
+        miss_state_n =  (~notification_en_i | dma_done_i) 
+                     ? ((stat_info_in.dirty[chosen_way_n] & valid_v_i[chosen_way_n])
+                        ? SEND_EVICT_ADDR
+                        : STORE_TAG_MISS_ALLOCATE)
+                     : STORE_TAG_MISS;
       end
 
       STORE_TAG_MISS_ALLOCATE: begin

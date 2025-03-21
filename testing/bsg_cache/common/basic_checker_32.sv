@@ -40,7 +40,7 @@ module basic_checker_32
   always_comb begin
     case (cache_pkt.opcode)
 
-      SW: begin
+      SW, IO_SW: begin
         store_data = cache_pkt.data;
         store_mask = 4'b1111;
       end
@@ -111,7 +111,7 @@ module basic_checker_32
 
   always_comb begin
     case (cache_pkt.opcode)
-      LW: load_data_final = load_data;
+      LW, IO_LW: load_data_final = load_data;
       LH: load_data_final = {{16{half_sel[15]}}, half_sel};
       LB: load_data_final = {{24{byte_sel[7]}}, byte_sel};
       LHU: load_data_final = {{16{1'b0}}, half_sel};
@@ -143,11 +143,11 @@ module basic_checker_32
               result[send_id] = '0;
               send_id++;
             end
-            LM, LW, LH, LB, LHU, LBU: begin
+            LM, LW, LH, LB, LHU, LBU, IO_LW: begin
               result[send_id] = load_data_final;
               send_id++;
             end
-            SW, SH, SB, SM: begin
+            SW, SH, SB, SM, IO_SW: begin
               result[send_id] = '0;
               send_id++;
               for (integer i = 0; i < data_mask_width_lp; i++)
