@@ -4,6 +4,7 @@
 module testbench();
 
   import bsg_cache_pkg::*;
+  import bsg_noc_pkg::*;
 
   // clock/reset
   bit clk;
@@ -26,6 +27,7 @@ module testbench();
   // DUT parameters
   localparam num_dma_p=`NUM_DMA_P; // 2+
   localparam dma_ratio_p=`DMA_RATIO_P; // 32*X
+  localparam notification_en_p=`NOTIFICATION_EN_P;
 
   localparam dma_data_width_p=32*dma_ratio_p;
   localparam lg_num_dma_lp = `BSG_SAFE_CLOG2(num_dma_p);
@@ -42,7 +44,10 @@ module testbench();
   localparam wh_len_width_p=`BSG_WIDTH(data_len_p+1);
   localparam wh_cid_width_p=4;  // ?
   localparam wh_cord_width_p=4;  // ?
+  localparam wh_ruche_factor_p=1;
   localparam wh_flit_width_p=dma_data_width_p;
+  localparam wh_dims_p = 1;
+  localparam int wh_cord_markers_pos_p[1:0] = '{ wh_cord_width_p, 0 };
 
   localparam lg_sets_lp=`BSG_SAFE_CLOG2(sets_p);
   localparam tag_width_lp=addr_width_p-lg_sets_lp-block_offset_width_p;
@@ -88,9 +93,17 @@ module testbench();
   `declare_bsg_ready_and_link_sif_s(wh_flit_width_p, bsg_ready_and_link_sif_s);
   bsg_ready_and_link_sif_s [num_dma_p-1:0] wh_link_sif_li, wh_link_sif_lo;
 
+  localparam [wh_cid_width_p-1:0] mem_cid_lp = 0;
+  localparam [wh_cid_width_p-1:0] shadow_cid_lp = 1;
+  localparam [wh_cord_width_p-1:0] mem_cord_lp = {{(wh_cord_width_p-1){1'b1}},1'b1}; 
+  localparam [wh_cord_width_p-1:0] io_cord_lp = {{(wh_cord_width_p-1){1'b1}},1'b0};
+
+  `declare_bsg_cache_wh_header_flit_s(wh_flit_width_p,wh_cord_width_p,wh_len_width_p,wh_cid_width_p);
+  `declare_bsg_cache_wh_notify_info_s(wh_flit_width_p, wh_cord_width_p, wh_len_width_p, wh_cid_width_p, ways_p);
   // DUT
   for (genvar i = 0; i < num_dma_p; i++)
-    begin : cache 
+    begin : cache
+      wire notification_en_li = notification_en_p;
       bsg_cache #(
         .addr_width_p(addr_width_p)
         ,.data_width_p(data_width_p)
@@ -125,7 +138,7 @@ module testbench();
         ,.dma_data_yumi_i(dma_data_yumi_li[i])
 
         ,.v_we_o()
-        ,.notification_en_i(1'b1)
+        ,.notification_en_i(notification_en_li)
       );
 
       // random yumi generator
@@ -140,6 +153,17 @@ module testbench();
         ,.yumi_o(yumi_li[i])
       );
 
+      bsg_cache_wh_header_flit_s header_flit;
+      assign header_flit = wh_link_sif_lo[i].data;
+      // TODO: make into opcode... or at least the header flit struct itself
+      bsg_cache_wh_notify_info_s notify_info;
+      assign notify_info = header_flit.unused;
+      wire [wh_cord_width_p-1:0] dest_wh_cord_li = notify_info.io_op
+        ? io_cord_lp
+        : mem_cord_lp;
+      wire [wh_cid_width_p-1:0] dest_wh_cid_li = notify_info.write_validate
+        ? shadow_cid_lp
+        : mem_cid_lp;
       bsg_cache_dma_to_wormhole #(
          .dma_addr_width_p(addr_width_p)
          ,.dma_burst_len_p(data_len_p)
@@ -169,16 +193,18 @@ module testbench();
          ,.wh_link_sif_o(wh_link_sif_lo[i])
 
          ,.my_wh_cord_i('0)
-         ,.dest_wh_cord_i({wh_cord_width_p{1'b1}})
+         ,.dest_wh_cord_i(dest_wh_cord_li)
          ,.my_wh_cid_i(wh_cid_width_p'(i))
-         ,.dest_wh_cid_i(wh_cid_width_p'(i))
-         ,.io_wh_cord_i({{(wh_cord_width_p-1){1'b1}},1'b0})
+         ,.dest_wh_cid_i(dest_wh_cid_li)
          );
     end
 
   bsg_ready_and_link_sif_s wh_link_concentrated_li, wh_link_concentrated_lo;
-  bsg_ready_and_link_sif_s wh_link_concentrated_lo_filtered;
-  bsg_ready_and_link_sif_s wh_link_wh2dma_lo;
+  bsg_ready_and_link_sif_s mem_link_sif_li, mem_link_sif_lo;
+  bsg_ready_and_link_sif_s dram_link_sif_li, dram_link_sif_lo;
+  bsg_ready_and_link_sif_s shadow_link_sif_li, shadow_link_sif_lo;
+  //bsg_ready_and_link_sif_s wh_link_concentrated_lo_filtered, wh_link_concentrated_li_filtered;
+  //bsg_ready_and_link_sif_s wh_link_wh2dma_lo;
 
   bsg_wormhole_concentrator
    #(.flit_width_p(wh_flit_width_p)
@@ -187,7 +213,7 @@ module testbench();
      ,.cord_width_p(wh_cord_width_p)
      ,.num_in_p(num_dma_p)
      )
-   concentrator
+   dma_concentrator
     (.clk_i(clk)
      ,.reset_i(reset)
 
@@ -198,260 +224,350 @@ module testbench();
      ,.concentrated_link_o(wh_link_concentrated_lo)
      );
 
- `declare_bsg_cache_wh_header_flit_s(wh_flit_width_p,wh_cord_width_p,wh_len_width_p,wh_cid_width_p);
-  bsg_cache_wh_header_flit_s header_flit, io_read_header_flit_back;
-  assign header_flit = wh_link_concentrated_lo.data;
+  //`declare_bsg_cache_wh_header_flit_s(wh_flit_width_p,wh_cord_width_p,wh_len_width_p,wh_cid_width_p);
+  //bsg_cache_wh_header_flit_s header_flit, io_read_header_flit_back;
+  //assign header_flit = wh_link_concentrated_lo.data;
 
-  `declare_bsg_cache_wh_notify_info_s(wh_flit_width_p,wh_cord_width_p,wh_len_width_p,wh_cid_width_p,ways_p);
-  bsg_cache_wh_notify_info_s notify_info, notify_info_n, notify_info_r;
-  assign notify_info = header_flit.unused;
+  //logic expecting_header_r_lo; 
+  //bsg_wormhole_router_packet_parser
+  // #(.payload_len_bits_p($bits(header_flit.len)))
+  // parser
+  //  (.clk_i(clk)
+  //   ,.reset_i(reset)
+  //   ,.fifo_v_i(wh_link_concentrated_lo.v)
+  //   ,.fifo_payload_len_i(header_flit.len)
+  //   ,.fifo_yumi_i(wh_link_concentrated_li.ready_and_rev & wh_link_concentrated_lo.v)
+  //   ,.expecting_header_r_o(expecting_header_r_lo)
+  //   );
+  // TODO: make into opcode... or at least the header flit struct itself
+  //`declare_bsg_cache_wh_notify_info_s(wh_flit_width_p, wh_cord_width_p, wh_len_width_p, wh_cid_width_p, ways_p);
+  //bsg_cache_wh_notify_info_s notify_info;
+  //assign notify_info = header_flit.unused;
+  //wire is_eviction = expecting_header_r_lo & notify_info.write_validate;
 
-  bsg_cache_wh_opcode_e wh_opcode_r, wh_opcode_n;
+  //assign wh_link_filtered_lo.data = wh_link_concentrated_lo.data;
+  //assign wh_link_filtered_lo.v = wh_link_concentrated_lo.v && !is_eviction;
+  //assign wh_link_concentrated_li.ready_and_rev = wh_link_filtered_li.ready_and_rev || is_eviction;
 
-  typedef enum logic [2:0] {
-    TRANS_RESET
-    , TRANS_READY
-    , TRANS_COUNT
-    , TRANS_IO_READ_REPLY_WAIT
-    , TRANS_IO_READ_REPLY_READY
-    , TRANS_IO_READ_REPLY_SEND
-  } trans_state_e;
+  //assign wh_link_concentrated_li.data = wh_link_filtered_li.data;
+  //assign wh_link_concentrated_li.v = wh_link_filtered_li.v;
+  //assign wh_link_filtered_lo.ready_and_rev = wh_link_concentrated_lo.ready_and_rev;
 
-  trans_state_e trans_state_r, trans_state_n;
+  
 
-  localparam max_count_width_lp = `BSG_SAFE_CLOG2(data_len_p+2);
-  logic trans_clear_li;
-  logic trans_up_li;
-  logic [max_count_width_lp-1:0] trans_count_lo;
-  logic [max_count_width_lp-1:0] cnt_max_r, cnt_max_n;
-  logic [wh_cord_width_p-1:0] src_cord_r, src_cord_n;
-  logic [wh_cid_width_p-1:0] src_cid_r, src_cid_n;
-  logic wh_link_concentrated_yumi_li;
-
-  bsg_counter_clear_up #(
-    .max_val_p(data_len_p+2-1)
-    ,.init_val_p(0)
-  ) trans_count (
-    .clk_i(clk)
-    ,.reset_i(reset)
-    ,.clear_i(trans_clear_li)
-    ,.up_i(trans_up_li)
-    ,.count_o(trans_count_lo)
-  );
-
-  always_comb begin
-    trans_state_n = trans_state_r;
-    trans_clear_li = 1'b0;
-    trans_up_li = 1'b0;
-    cnt_max_n = cnt_max_r;
-    wh_opcode_n = wh_opcode_r;
-
-    wh_link_concentrated_li = wh_link_wh2dma_lo;
-
-    src_cord_n = src_cord_r;
-    src_cid_n = src_cid_r;
-
-    notify_info_n = notify_info_r;
-
-    wh_link_concentrated_yumi_li = 1'b0;
-
-    io_read_header_flit_back.unused = '0;
-    io_read_header_flit_back.opcode = e_cache_wh_read; // doesn't matter
-    io_read_header_flit_back.src_cord = '0; // doesn't matter
-    io_read_header_flit_back.src_cid = '0; // doesn't matter
-    io_read_header_flit_back.len = 1; // only send one packet back for io read data reply
-    io_read_header_flit_back.cord = src_cord_r;
-    io_read_header_flit_back.cid = src_cid_r;
-
-    case (trans_state_r)
-      TRANS_RESET: begin
-        trans_state_n = TRANS_READY;
-      end
-
-      TRANS_READY: begin
-        wh_link_concentrated_yumi_li = wh_link_concentrated_lo.v & 
-                                       ((notify_info.io_op || notify_info.write_validate)
-                                        ? 1'b1
-                                        : wh_link_wh2dma_lo.ready_and_rev);
-
-        wh_link_concentrated_li.v = wh_link_wh2dma_lo.v;
-        wh_link_concentrated_li.data = wh_link_wh2dma_lo.data;
-        wh_link_concentrated_li.ready_and_rev = wh_link_concentrated_yumi_li;
-
-        notify_info_n = (wh_link_concentrated_lo.v & wh_link_concentrated_yumi_li)
-                      ? notify_info
-                      : notify_info_r;
-
-        cnt_max_n = (wh_link_concentrated_lo.v & wh_link_concentrated_yumi_li)
-                  ? ((header_flit.opcode == e_cache_wh_read) 
-                    ? 1      // regular read, io read, write validate notification
-                    : ((header_flit.opcode == e_cache_wh_write_non_masked)
-                      ? (notify_info.io_op 
-                        ? 2   // io write
-                        : (1 + data_len_p))  // regular non-masked write
-                      : (2 + data_len_p)))   // regular masked write
-                  : cnt_max_r;
-
-        src_cid_n = (wh_link_concentrated_lo.v & wh_link_concentrated_yumi_li) ? header_flit.src_cid : src_cid_r;
-        src_cord_n =(wh_link_concentrated_lo.v & wh_link_concentrated_yumi_li) ? header_flit.src_cord : src_cord_r;
-
-        wh_opcode_n = (wh_link_concentrated_lo.v & wh_link_concentrated_yumi_li) ? header_flit.opcode : wh_opcode_r;
-
-        trans_state_n = (wh_link_concentrated_lo.v & wh_link_concentrated_yumi_li)
-          ? TRANS_COUNT
-          : TRANS_READY;
-      end
-
-      TRANS_COUNT: begin
-        wh_link_concentrated_yumi_li = wh_link_concentrated_lo.v & 
-                                       ((notify_info_r.io_op || notify_info_r.write_validate)
-                                        ? 1'b1
-                                        : wh_link_wh2dma_lo.ready_and_rev);
-
-        wh_link_concentrated_li.v = wh_link_wh2dma_lo.v;
-        wh_link_concentrated_li.data = wh_link_wh2dma_lo.data;
-        wh_link_concentrated_li.ready_and_rev = wh_link_concentrated_yumi_li;
-
-        trans_up_li = (trans_count_lo != (cnt_max_r-1)) & wh_link_concentrated_lo.v & wh_link_concentrated_yumi_li;
-        trans_clear_li = (trans_count_lo == (cnt_max_r-1)) & wh_link_concentrated_lo.v & wh_link_concentrated_yumi_li;
-        trans_state_n = trans_clear_li
-                      ? (((wh_opcode_r == e_cache_wh_read) & notify_info_r.io_op)
-                        ? (((wh2dma.recv_state_r == 2'b01) || (wh2dma.recv_state_n == 2'b01))
-                          ? TRANS_IO_READ_REPLY_READY
-                          : TRANS_IO_READ_REPLY_WAIT)
-                        : TRANS_READY)
-                      : TRANS_COUNT;
-      end
-
-      TRANS_IO_READ_REPLY_WAIT: begin
-        wh_link_concentrated_li.v = wh_link_wh2dma_lo.v;
-        wh_link_concentrated_li.data = wh_link_wh2dma_lo.data;
-        wh_link_concentrated_li.ready_and_rev = 1'b0;
-
-        trans_state_n = (wh2dma.recv_state_n == 2'b01) ? TRANS_IO_READ_REPLY_READY : TRANS_IO_READ_REPLY_WAIT;
-      end
-
-      TRANS_IO_READ_REPLY_READY: begin
-        wh_link_concentrated_li.v = 1'b1;
-        wh_link_concentrated_li.data = io_read_header_flit_back;
-        wh_link_concentrated_li.ready_and_rev = 1'b0;
-        trans_state_n = wh_link_concentrated_lo.ready_and_rev
-          ? TRANS_IO_READ_REPLY_SEND
-          : TRANS_IO_READ_REPLY_READY;
-      end
-
-      TRANS_IO_READ_REPLY_SEND: begin
-        wh_link_concentrated_li.v = 1'b1;
-        wh_link_concentrated_li.data = wh_flit_width_p'({1'b0});
-        wh_link_concentrated_li.ready_and_rev = 1'b0;
-        trans_state_n = wh_link_concentrated_lo.ready_and_rev ? TRANS_READY : TRANS_IO_READ_REPLY_SEND;
-      end
-
-      default: begin
-        trans_state_n = TRANS_READY;
-      end
-    endcase
-  end
-
-
-  // for write validate notification and io read/write, the wh packets don't go into wh_to_dma
-  assign wh_link_concentrated_lo_filtered.data = header_flit;
-  assign wh_link_concentrated_lo_filtered.ready_and_rev = (((trans_state_n == TRANS_IO_READ_REPLY_READY) && (wh2dma.recv_state_r == 2'b01))
-                                                          || (trans_state_r == TRANS_IO_READ_REPLY_READY) 
-                                                          || (trans_state_r == TRANS_IO_READ_REPLY_SEND))
-                                                        ? 1'b0
-                                                        : wh_link_concentrated_lo.ready_and_rev;
-  // assign wh_link_concentrated_lo_filtered.v = (((trans_state_r == TRANS_COUNT) 
-  //                                              && ((wh_opcode_r == e_cache_wh_read)
-  //                                                 || (wh_opcode_r == e_cache_wh_write_non_masked)
-  //                                                 || (wh_opcode_r == e_cache_wh_write_masked)))
-  //                                             || ((trans_state_r == TRANS_READY) 
-  //                                               && ((header_flit.opcode == e_cache_wh_read)
-  //                                                 || (header_flit.opcode == e_cache_wh_write_non_masked) 
-  //                                                 || (header_flit.opcode == e_cache_wh_write_masked))))
-  //                                            && wh_link_concentrated_lo.v
-  //                                           ? 1'b1
-  //                                           : 1'b0;
-
-  assign wh_link_concentrated_lo_filtered.v = wh_link_concentrated_lo.v &
-                                            (((trans_state_r == TRANS_COUNT) & ~notify_info_r.write_validate & ~notify_info_r.io_op)
-                                            || ((trans_state_r == TRANS_READY) & ~notify_info.write_validate & ~notify_info.io_op));
-
-  bsg_cache_dma_pkt_s mem_dma_pkt;
-  logic mem_dma_pkt_v_lo, mem_dma_pkt_yumi_li;
-  logic [wh_flit_width_p-1:0] mem_dma_data_li;
-  logic mem_dma_data_v_li, mem_dma_data_ready_and_lo;
-  logic [dma_data_width_p-1:0] mem_dma_data_lo;
-  logic mem_dma_data_v_lo, mem_dma_data_yumi_li;
-
-  logic [wh_cord_width_p-1:0] wh_header_cord_lo;
-  logic [wh_cid_width_p-1:0] wh_header_cid_lo;
-  wire [lg_num_dma_lp-1:0] wh_dma_id_li = header_flit.src_cid[0+:lg_num_dma_lp];
-
-  bsg_wormhole_to_cache_dma_inorder #(
-     .num_dma_p(num_dma_p)
-     ,.dma_addr_width_p(addr_width_p)
-     ,.dma_burst_len_p(data_len_p)
-     ,.dma_mask_width_p(block_size_in_words_p)
-     ,.dma_ways_p(ways_p)
-     ,.wh_flit_width_p(wh_flit_width_p)
-     ,.wh_cid_width_p(wh_cid_width_p)
-     ,.wh_cord_width_p(wh_cord_width_p)
-     ,.wh_len_width_p(wh_len_width_p)
-   ) wh2dma (
-     .clk_i(clk)
+  bsg_ready_and_link_sif_s [E:P] io_router_link_sif_li, io_router_link_sif_lo;
+  bsg_wormhole_router
+   #(.flit_width_p(wh_flit_width_p)
+	 ,.dims_p(wh_dims_p)
+     ,.cord_markers_pos_p(wh_cord_markers_pos_p)
+     ,.len_width_p(wh_len_width_p)
+     ,.debug_lp(0)
+     ,.hold_on_valid_p(0) // shouldn't matter, but better stress test
+     )
+   io_router
+    (.clk_i(clk)
      ,.reset_i(reset)
 
-     ,.wh_link_sif_i(wh_link_concentrated_lo_filtered)
-     ,.wh_dma_id_i(wh_dma_id_li)
-     ,.wh_link_sif_o(wh_link_wh2dma_lo)
+     ,.link_i(io_router_link_sif_li)
+     ,.link_o(io_router_link_sif_lo)
 
-     ,.dma_pkt_o(mem_dma_pkt)
-     ,.dma_pkt_v_o(mem_dma_pkt_v_lo)
-     ,.dma_pkt_yumi_i(mem_dma_pkt_yumi_li)
-     ,.dma_pkt_id_o()
+     ,.my_cord_i(io_cord_lp)
+     );
 
-     ,.dma_data_i(mem_dma_data_li)
-     ,.dma_data_v_i(mem_dma_data_v_li)
-     ,.dma_data_ready_and_o(mem_dma_data_ready_and_lo)
+  bsg_nonsynth_wormhole_test_mem
+   #(.vcache_data_width_p(data_width_p)
+     ,.vcache_block_size_in_words_p(block_size_in_words_p)
+     ,.vcache_dma_data_width_p(dma_data_width_p)
+     ,.num_vcaches_p(num_dma_p)
+     ,.wh_cid_width_p(wh_cid_width_p)
+     ,.wh_flit_width_p(wh_flit_width_p)
+     ,.wh_cord_width_p(wh_cord_width_p)
+     ,.wh_len_width_p(wh_len_width_p)
+     ,.wh_ruche_factor_p(wh_ruche_factor_p)
+     ,.no_concentration_p(1)
+     ,.no_coordination_p(1)
+     ,.mem_size_p(2**addr_width_p-1)
+     )
+   io_mem
+    (.clk_i(clk)
+     ,.reset_i(reset)
+     ,.wh_link_sif_i(io_router_link_sif_lo[P])
+     ,.wh_link_sif_o(io_router_link_sif_li[P])
+     );
 
-     ,.dma_data_o(mem_dma_data_lo)
-     ,.dma_data_v_o(mem_dma_data_v_lo)
-     ,.dma_data_yumi_i(mem_dma_data_yumi_li)
-  );
+  assign io_router_link_sif_li[W] = wh_link_concentrated_lo;
+  assign wh_link_concentrated_li = io_router_link_sif_lo[W];
 
-  // DMA model
-  bsg_nonsynth_dma_model #(
-    .addr_width_p(addr_width_p)
-    ,.data_width_p(dma_data_width_p)
-    ,.block_size_in_words_p(data_len_p)
-    ,.mask_width_p(block_size_in_words_p)
-    ,.els_p(mem_size_p)
-    ,.ways_p(ways_p)
+  assign mem_link_sif_lo = io_router_link_sif_lo[E];
+  assign io_router_link_sif_li[E] = mem_link_sif_li;
 
-    ,.read_delay_p(`DMA_READ_DELAY_P)
-    ,.write_delay_p(`DMA_WRITE_DELAY_P)
-    ,.dma_req_delay_p(`DMA_REQ_DELAY_P)
-    ,.dma_data_delay_p(`DMA_DATA_DELAY_P)
+// `declare_bsg_cache_wh_header_flit_s(wh_flit_width_p,wh_cord_width_p,wh_len_width_p,wh_cid_width_p);
+//  bsg_cache_wh_header_flit_s header_flit, io_read_header_flit_back;
+//  assign header_flit = mem_link_sif_lo.data;
+//
+//  `declare_bsg_cache_wh_notify_info_s(wh_flit_width_p,wh_cord_width_p,wh_len_width_p,wh_cid_width_p,ways_p);
+//  bsg_cache_wh_notify_info_s notify_info, notify_info_n, notify_info_r;
+//  assign notify_info = header_flit.unused;
+//
+//  bsg_cache_wh_opcode_e wh_opcode_r, wh_opcode_n;
+//
+//  typedef enum logic [2:0] {
+//    TRANS_RESET
+//    , TRANS_READY
+//    , TRANS_COUNT
+//    , TRANS_IO_READ_REPLY_WAIT
+//    , TRANS_IO_READ_REPLY_READY
+//    , TRANS_IO_READ_REPLY_SEND
+//  } trans_state_e;
+//
+//  trans_state_e trans_state_r, trans_state_n;
+//
+//  localparam max_count_width_lp = `BSG_SAFE_CLOG2(data_len_p+2);
+//  logic trans_clear_li;
+//  logic trans_up_li;
+//  logic [max_count_width_lp-1:0] trans_count_lo;
+//  logic [max_count_width_lp-1:0] cnt_max_r, cnt_max_n;
+//  logic [wh_cord_width_p-1:0] src_cord_r, src_cord_n;
+//  logic [wh_cid_width_p-1:0] src_cid_r, src_cid_n;
+//  logic wh_link_concentrated_yumi_li;
+//
+//  bsg_counter_clear_up #(
+//    .max_val_p(data_len_p+2-1)
+//    ,.init_val_p(0)
+//  ) trans_count (
+//    .clk_i(clk)
+//    ,.reset_i(reset)
+//    ,.clear_i(trans_clear_li)
+//    ,.up_i(trans_up_li)
+//    ,.count_o(trans_count_lo)
+//  );
+//
+//  always_comb begin
+//    trans_state_n = trans_state_r;
+//    trans_clear_li = 1'b0;
+//    trans_up_li = 1'b0;
+//    cnt_max_n = cnt_max_r;
+//    wh_opcode_n = wh_opcode_r;
+//
+//    mem_link_sif_li = wh_link_wh2dma_lo;
+//
+//    src_cord_n = src_cord_r;
+//    src_cid_n = src_cid_r;
+//
+//    notify_info_n = notify_info_r;
+//
+//    wh_link_concentrated_yumi_li = 1'b0;
+//
+//    io_read_header_flit_back.unused = '0;
+//    io_read_header_flit_back.opcode = e_cache_wh_read; // doesn't matter
+//    io_read_header_flit_back.src_cord = '0; // doesn't matter
+//    io_read_header_flit_back.src_cid = '0; // doesn't matter
+//    io_read_header_flit_back.len = 1; // only send one packet back for io read data reply
+//    io_read_header_flit_back.cord = src_cord_r;
+//    io_read_header_flit_back.cid = src_cid_r;
+//
+//    case (trans_state_r)
+//      TRANS_RESET: begin
+//        trans_state_n = TRANS_READY;
+//      end
+//
+//      TRANS_READY: begin
+//        wh_link_concentrated_yumi_li = mem_link_sif_lo.v & 
+//                                       ((notify_info.io_op || notify_info.write_validate)
+//                                        ? 1'b1
+//                                        : wh_link_wh2dma_lo.ready_and_rev);
+//
+//        mem_link_sif_li.v = wh_link_wh2dma_lo.v;
+//        mem_link_sif_li.data = wh_link_wh2dma_lo.data;
+//        mem_link_sif_li.ready_and_rev = wh_link_concentrated_yumi_li;
+//
+//        notify_info_n = (mem_link_sif_lo.v & wh_link_concentrated_yumi_li)
+//                      ? notify_info
+//                      : notify_info_r;
+//
+//        cnt_max_n = (mem_link_sif_lo.v & wh_link_concentrated_yumi_li)
+//                  ? ((header_flit.opcode == e_cache_wh_read) 
+//                    ? 1      // regular read, io read, write validate notification
+//                    : ((header_flit.opcode == e_cache_wh_write_non_masked)
+//                      ? (notify_info.io_op 
+//                        ? 2   // io write
+//                        : (1 + data_len_p))  // regular non-masked write
+//                      : (2 + data_len_p)))   // regular masked write
+//                  : cnt_max_r;
+//
+//        src_cid_n = (mem_link_sif_lo.v & wh_link_concentrated_yumi_li) ? header_flit.src_cid : src_cid_r;
+//        src_cord_n =(mem_link_sif_lo.v & wh_link_concentrated_yumi_li) ? header_flit.src_cord : src_cord_r;
+//
+//        wh_opcode_n = (mem_link_sif_lo.v & wh_link_concentrated_yumi_li) ? header_flit.opcode : wh_opcode_r;
+//
+//        trans_state_n = (mem_link_sif_lo.v & wh_link_concentrated_yumi_li)
+//          ? TRANS_COUNT
+//          : TRANS_READY;
+//      end
+//
+//      TRANS_COUNT: begin
+//        wh_link_concentrated_yumi_li = mem_link_sif_lo.v & 
+//                                       ((notify_info_r.io_op || notify_info_r.write_validate)
+//                                        ? 1'b1
+//                                        : wh_link_wh2dma_lo.ready_and_rev);
+//
+//        mem_link_sif_li.v = wh_link_wh2dma_lo.v;
+//        mem_link_sif_li.data = wh_link_wh2dma_lo.data;
+//        mem_link_sif_li.ready_and_rev = wh_link_concentrated_yumi_li;
+//
+//        trans_up_li = (trans_count_lo != (cnt_max_r-1)) & mem_link_sif_lo.v & wh_link_concentrated_yumi_li;
+//        trans_clear_li = (trans_count_lo == (cnt_max_r-1)) & mem_link_sif_lo.v & wh_link_concentrated_yumi_li;
+//        trans_state_n = trans_clear_li
+//                      ? (((wh_opcode_r == e_cache_wh_read) & notify_info_r.io_op)
+//                        ? (((wh2dma.recv_state_r == 2'b01) || (wh2dma.recv_state_n == 2'b01))
+//                          ? TRANS_IO_READ_REPLY_READY
+//                          : TRANS_IO_READ_REPLY_WAIT)
+//                        : TRANS_READY)
+//                      : TRANS_COUNT;
+//      end
+//
+//      TRANS_IO_READ_REPLY_WAIT: begin
+//        mem_link_sif_li.v = wh_link_wh2dma_lo.v;
+//        mem_link_sif_li.data = wh_link_wh2dma_lo.data;
+//        mem_link_sif_li.ready_and_rev = 1'b0;
+//
+//        trans_state_n = (wh2dma.recv_state_n == 2'b01) ? TRANS_IO_READ_REPLY_READY : TRANS_IO_READ_REPLY_WAIT;
+//      end
+//
+//      TRANS_IO_READ_REPLY_READY: begin
+//        mem_link_sif_li.v = 1'b1;
+//        mem_link_sif_li.data = io_read_header_flit_back;
+//        mem_link_sif_li.ready_and_rev = 1'b0;
+//        trans_state_n = mem_link_sif_lo.ready_and_rev
+//          ? TRANS_IO_READ_REPLY_SEND
+//          : TRANS_IO_READ_REPLY_READY;
+//      end
+//
+//      TRANS_IO_READ_REPLY_SEND: begin
+//        mem_link_sif_li.v = 1'b1;
+//        mem_link_sif_li.data = wh_flit_width_p'({1'b0});
+//        mem_link_sif_li.ready_and_rev = 1'b0;
+//        trans_state_n = mem_link_sif_lo.ready_and_rev ? TRANS_READY : TRANS_IO_READ_REPLY_SEND;
+//      end
+//
+//      default: begin
+//        trans_state_n = TRANS_READY;
+//      end
+//    endcase
+//  end
+//
+//
+//  // DWP RESTORE
+//  // for write validate notification and io read/write, the wh packets don't go into wh_to_dma
+//  //assign wh_link_concentrated_lo_filtered.data = header_flit;
+//  //assign wh_link_concentrated_lo_filtered.ready_and_rev = (((trans_state_n == TRANS_IO_READ_REPLY_READY) && (wh2dma.recv_state_r == 2'b01))
+//  //                                                        || (trans_state_r == TRANS_IO_READ_REPLY_READY) 
+//  //                                                        || (trans_state_r == TRANS_IO_READ_REPLY_SEND))
+//  //                                                      ? 1'b0
+//  //                                                      : mem_link_sif_lo.ready_and_rev;
+//  // assign wh_link_concentrated_lo_filtered.v = (((trans_state_r == TRANS_COUNT) 
+//  //                                              && ((wh_opcode_r == e_cache_wh_read)
+//  //                                                 || (wh_opcode_r == e_cache_wh_write_non_masked)
+//  //                                                 || (wh_opcode_r == e_cache_wh_write_masked)))
+//  //                                             || ((trans_state_r == TRANS_READY) 
+//  //                                               && ((header_flit.opcode == e_cache_wh_read)
+//  //                                                 || (header_flit.opcode == e_cache_wh_write_non_masked) 
+//  //                                                 || (header_flit.opcode == e_cache_wh_write_masked))))
+//  //                                            && mem_link_sif_lo.v
+//  //                                           ? 1'b1
+//  //                                           : 1'b0;
+//
+//  assign wh_link_concentrated_lo_filtered.v = mem_link_sif_lo.v &
+//                                            (((trans_state_r == TRANS_COUNT) & ~notify_info_r.write_validate & ~notify_info_r.io_op)
+//                                            || ((trans_state_r == TRANS_READY) & ~notify_info.write_validate & ~notify_info.io_op));
 
-  ) dma0 (
-    .clk_i(clk)
-    ,.reset_i(reset)
+   bsg_wormhole_concentrator
+    #(.flit_width_p(wh_flit_width_p)
+      ,.len_width_p(wh_len_width_p)
+      ,.cid_width_p(wh_cid_width_p)
+      ,.cord_width_p(wh_cord_width_p)
+      ,.num_in_p(2)
+      )
+    shadow_concentrator
+     (.clk_i(clk)
+      ,.reset_i(reset)
+ 
+      ,.links_i({shadow_link_sif_li, dram_link_sif_li})
+      ,.links_o({shadow_link_sif_lo, dram_link_sif_lo})
+ 
+      ,.concentrated_link_i(mem_link_sif_lo)
+      ,.concentrated_link_o(mem_link_sif_li)
+      );
 
-    ,.dma_pkt_i(mem_dma_pkt)
-    ,.dma_pkt_v_i(mem_dma_pkt_v_lo)
-    ,.dma_pkt_yumi_o(mem_dma_pkt_yumi_li)
+  // TODO: Hookup, currently just a sink
+  assign shadow_link_sif_li = '1;
 
-    ,.dma_data_o(mem_dma_data_li)
-    ,.dma_data_v_o(mem_dma_data_v_li)
-    ,.dma_data_ready_i(mem_dma_data_ready_and_lo)
+  bsg_cache_wh_header_flit_s shadow_header_flit;
+  assign shadow_header_flit = shadow_link_sif_lo;
+  bsg_cache_wh_notify_info_s shadow_notify_info;
+  assign shadow_notify_info = shadow_header_flit.unused;
+  logic shadow_expecting_header_r_lo;
+  bsg_wormhole_router_packet_parser
+   #(.payload_len_bits_p($bits(shadow_header_flit.len)))
+   shadow_header_parser
+    (.clk_i(clk)
+     ,.reset_i(reset)
+     ,.fifo_v_i(shadow_link_sif_lo.v)
+     ,.fifo_payload_len_i(shadow_header_flit.len)
+     ,.fifo_yumi_i(shadow_link_sif_lo.v & shadow_link_sif_li.ready_and_rev)
+     ,.expecting_header_r_o(shadow_expecting_header_r_lo)
+     );
 
-    ,.dma_data_i(mem_dma_data_lo)
-    ,.dma_data_v_i(mem_dma_data_v_lo)
-    ,.dma_data_yumi_o(mem_dma_data_yumi_li)
-  );
+  always_ff @(negedge clk) begin
+    if (shadow_expecting_header_r_lo && shadow_link_sif_lo.v && !shadow_notify_info.write_validate) begin
+      $error("write_validate !set for shadow link packet");
+    end
+  end
 
+  bsg_nonsynth_wormhole_test_mem
+   #(.vcache_data_width_p(data_width_p)
+     ,.vcache_block_size_in_words_p(block_size_in_words_p)
+     ,.vcache_dma_data_width_p(dma_data_width_p)
+     ,.num_vcaches_p(num_dma_p)
+     ,.wh_cid_width_p(wh_cid_width_p)
+     ,.wh_flit_width_p(wh_flit_width_p)
+     ,.wh_cord_width_p(wh_cord_width_p)
+     ,.wh_len_width_p(wh_len_width_p)
+     ,.wh_ruche_factor_p(wh_ruche_factor_p)
+     //,.no_concentration_p(0)
+     //,.no_coordination_p(0)
+     ,.no_concentration_p(1)
+     ,.no_coordination_p(1)
+     ,.mem_size_p(2**addr_width_p-1)
+     )
+   dram_mem
+    (.clk_i(clk)
+     ,.reset_i(reset)
+     ,.wh_link_sif_i(dram_link_sif_lo)
+     ,.wh_link_sif_o(dram_link_sif_li)
+     );
 
+   bsg_cache_wh_header_flit_s dram_header_flit;
+   assign dram_header_flit = dram_link_sif_lo;
+   bsg_cache_wh_notify_info_s dram_notify_info;
+   assign dram_notify_info = dram_header_flit.unused;
+   logic dram_expecting_header_r_lo;
+   bsg_wormhole_router_packet_parser
+    #(.payload_len_bits_p($bits(dram_header_flit.len)))
+    dram_header_parser
+     (.clk_i(clk)
+      ,.reset_i(reset)
+      ,.fifo_v_i(dram_link_sif_lo.v)
+      ,.fifo_payload_len_i(dram_header_flit.len)
+      ,.fifo_yumi_i(dram_link_sif_lo.v & dram_link_sif_li.ready_and_rev)
+      ,.expecting_header_r_o(dram_expecting_header_r_lo)
+      );
+ 
+   always_ff @(negedge clk) begin
+     if (dram_expecting_header_r_lo && dram_link_sif_lo.v && dram_notify_info.write_validate) begin
+       $error("write_validate set for dram link packet");
+     end
+   end
 
 //  1. header_flit.unused = {'0, dma_pkt_lo.read_pending, dma_pkt_lo.way_id}, for a fill wh header flit,
 //     read_pending means it's followed by an evict request, the address that it's going to replace in 
@@ -470,8 +586,6 @@ module testbench();
   logic [tag_mem_width_lp-1:0] shadow_tag_mem [num_dma_p-1:0][sets_p-1:0] = '{default: '0};
 
   // TODO: PENDING EVICT TABLE
-
-
 
 
 
@@ -545,49 +659,49 @@ module testbench();
     if (reset) begin
       sent_r <= '0;
       recv_r <= '0;
-      trans_state_r <= TRANS_RESET;
-      cnt_max_r <= '0;
-      src_cord_r <= '0;
-      src_cid_r <= '0;
-      wh_opcode_r = e_cache_wh_read;
-      notify_info_r <= '0;
+      //trans_state_r <= TRANS_RESET;
+      //cnt_max_r <= '0;
+      //src_cord_r <= '0;
+      //src_cid_r <= '0;
+      //wh_opcode_r = e_cache_wh_read;
+      //notify_info_r <= '0;
       test_done_r <= '0;
     end
     else begin
       sent_r <= sent_r + $countones(v_li & ready_lo);
       recv_r <= recv_r + $countones(v_lo & yumi_li);
-      trans_state_r <= trans_state_n;
-      cnt_max_r <= cnt_max_n;
-      src_cord_r <= src_cord_n;
-      src_cid_r <= src_cid_n;
-      wh_opcode_r <= wh_opcode_n;
-      notify_info_r <= notify_info_n;
+      //trans_state_r <= trans_state_n;
+      //cnt_max_r <= cnt_max_n;
+      //src_cord_r <= src_cord_n;
+      //src_cid_r <= src_cid_n;
+      //wh_opcode_r <= wh_opcode_n;
+      //notify_info_r <= notify_info_n;
       test_done_r <= done & (sent_r == recv_r);
     end
   end
 
   logic [tag_mem_width_lp-1:0] tag_mem_copy_lo [num_dma_p][sets_p];
   
-  for (genvar i = 0; i < num_dma_p; i++) 
-    begin : btag
-      bsg_tag_mem_check #(
-        .width_p(tag_mem_width_lp)
-        ,.sets_p(sets_p)
-        ,.num_dma_p(num_dma_p)
-      ) tag_mem_ck (
-        .clk_i(clk)
-        ,.reset_i(reset)
-        ,.data_i(cache[i].cache.tag_mem_data_li)
-        ,.v_i(cache[i].cache.tag_mem_v_li)
-        ,.w_i(cache[i].cache.tag_mem_w_li)
-        ,.w_mask_i(cache[i].cache.tag_mem_w_mask_li)
-        ,.addr_i(cache[i].cache.tag_mem_addr_li)
-        ,.shadow_tag_mem_i(shadow_tag_mem[i])
-        ,.check_en_i(done & (sent_r == recv_r))
-        ,.id_i(i)
-        // ,.tag_mem_copy_o(tag_mem_copy_lo[i])
-      );
-    end
+//  for (genvar i = 0; i < num_dma_p; i++) 
+//    begin : btag
+//      bsg_tag_mem_check #(
+//        .width_p(tag_mem_width_lp)
+//        ,.sets_p(sets_p)
+//        ,.num_dma_p(num_dma_p)
+//      ) tag_mem_ck (
+//        .clk_i(clk)
+//        ,.reset_i(reset)
+//        ,.data_i(cache[i].cache.tag_mem_data_li)
+//        ,.v_i(cache[i].cache.tag_mem_v_li)
+//        ,.w_i(cache[i].cache.tag_mem_w_li)
+//        ,.w_mask_i(cache[i].cache.tag_mem_w_mask_li)
+//        ,.addr_i(cache[i].cache.tag_mem_addr_li)
+//        ,.shadow_tag_mem_i(shadow_tag_mem[i])
+//        ,.check_en_i(done & (sent_r == recv_r))
+//        ,.id_i(i)
+//        // ,.tag_mem_copy_o(tag_mem_copy_lo[i])
+//      );
+//    end
 
   // integer dma_idx, set_idx;
   // integer mismatch_count = 0;

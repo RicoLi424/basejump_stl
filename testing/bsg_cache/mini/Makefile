@@ -37,8 +37,9 @@ DMA_WRITE_DELAY_P ?= 0
 DMA_REQ_DELAY_P   ?= 0
 DMA_DATA_DELAY_P  ?= 0
 WORD_TRACKING_P   ?= 1
+NOTIFICATION_EN_P ?= 1
 
-NUM_DMA_P ?= 4 # 2-4
+NUM_DMA_P ?= 2 # 2-4
 DMA_RATIO_P ?= 1 # 1-4
 
 VCS_DEFINES += +define+YUMI_MIN_DELAY_P=$(YUMI_MIN_DELAY_P)
@@ -52,6 +53,7 @@ VCS_DEFINES += +define+WORD_TRACKING_P=$(WORD_TRACKING_P)
 
 VCS_DEFINES += +define+NUM_DMA_P=$(NUM_DMA_P)
 VCS_DEFINES += +define+DMA_RATIO_P=$(DMA_RATIO_P)
+VCS_DEFINES += +define+NOTIFICATION_EN_P=$(NOTIFICATION_EN_P)
 ########################
 
 
@@ -76,7 +78,7 @@ out/%/trace.tr:
 	python $*.py > $@
 
 %.basic.run: simv out/%/trace.tr
-	(cd out/$*; $(SIMV) -reportstats +vcs+nostdout +wave=$(WAVE) +checker=basic -l simv.log)
+	(cd out/$*; $(SIMV) -no_save -reportstats +vcs+nostdout +wave=$(WAVE) +checker=basic -l simv.log)
 
 # %.basic.run: simv out/%/trace.tr
 # 	(cd out/$*; $(SIMV) +wave=$(WAVE) +checker=basic -l simv.log)

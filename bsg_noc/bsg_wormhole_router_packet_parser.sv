@@ -41,3 +41,6 @@ module bsg_wormhole_router_packet_parser #(parameter `BSG_INV_PARAM(payload_len_
   );
 
 endmodule
+
+`BSG_ABSTRACT_MODULE(bsg_wormhole_router_packet_parser)
+
