@@ -500,10 +500,14 @@ module testbench();
       );
 
   // TODO: Hookup, currently just a sink
-  assign shadow_link_sif_li = '1;
+  // assign shadow_link_sif_li = '1;
+  assign shadow_link_sif_li.v = 1'b0;
+  assign shadow_link_sif_li.ready_and_rev = 1'b1;
+  assign shadow_link_sif_li.data = '0;
+
 
   bsg_cache_wh_header_flit_s shadow_header_flit;
-  assign shadow_header_flit = shadow_link_sif_lo;
+  assign shadow_header_flit = shadow_link_sif_lo.data;
   bsg_cache_wh_notify_info_s shadow_notify_info;
   assign shadow_notify_info = shadow_header_flit.unused;
   logic shadow_expecting_header_r_lo;
@@ -548,7 +552,7 @@ module testbench();
      );
 
    bsg_cache_wh_header_flit_s dram_header_flit;
-   assign dram_header_flit = dram_link_sif_lo;
+   assign dram_header_flit = dram_link_sif_lo.data;
    bsg_cache_wh_notify_info_s dram_notify_info;
    assign dram_notify_info = dram_header_flit.unused;
    logic dram_expecting_header_r_lo;
@@ -680,7 +684,7 @@ module testbench();
     end
   end
 
-  logic [tag_mem_width_lp-1:0] tag_mem_copy_lo [num_dma_p][sets_p];
+  // logic [tag_mem_width_lp-1:0] tag_mem_copy_lo [num_dma_p][sets_p];
   
 //  for (genvar i = 0; i < num_dma_p; i++) 
 //    begin : btag

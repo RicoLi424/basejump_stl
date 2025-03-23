@@ -12,7 +12,6 @@ VCS_FLAGS += +v2k -sverilog -timescale=1ps/1ps -O4 -assert svaext
 
 
 ##### Test Suite #######
-# BASIC_TEST = test_byte1
 BASIC_TEST = test_random1 test_random2
 BASIC_TEST += test_byte1 test_byte2 test_byte3
 BASIC_TEST += test_mask1
