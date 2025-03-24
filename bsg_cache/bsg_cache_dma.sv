@@ -264,10 +264,9 @@ module bsg_cache_dma
     dma_pkt.read_pending = 1'b0;
     dma_pkt.uncached_op = uncached_op_v_i;
     dma_pkt.way_id = dma_way_i;
-    dma_pkt.addr = {
-      dma_addr_i[addr_width_p-1:block_offset_width_lp],
-      {(block_offset_width_lp){1'b0}}
-    };
+    dma_pkt.addr = uncached_op_v_i 
+                 ? {dma_addr_i[addr_width_p-1:byte_offset_width_lp], {(byte_offset_width_lp){1'b0}}}
+                 : {dma_addr_i[addr_width_p-1:block_offset_width_lp], {(block_offset_width_lp){1'b0}}};
     dma_pkt.mask = '0;
 
     data_mem_v_o = 1'b0;
@@ -396,7 +395,9 @@ module bsg_cache_dma
       end
 
       IO_SEND_DATA: begin
-        dma_state_n = out_fifo_ready_lo ? IDLE : IO_SEND_DATA;
+        dma_state_n = out_fifo_ready_lo 
+          ? IDLE 
+          : IO_SEND_DATA;
 
         out_fifo_v_li = 1'b1;
 

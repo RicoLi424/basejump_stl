@@ -7,7 +7,7 @@ INCDIR += +incdir+$(BASEJUMP_STL_DIR)/bsg_cache
 
 VCS_FLAGS =  -full64 +lint=all,noSVA-UA,noSVA-NSVU,noVCDE -debug_access
 VCS_FLAGS += +v2k -sverilog -timescale=1ps/1ps -O4 -assert svaext
-VCS_FLAGS +=  -reportstats
+# VCS_FLAGS +=  -reportstats
 
 
 ##### Test Suite #######
@@ -77,11 +77,11 @@ out/%/trace.tr:
 	mkdir -p out/$*
 	python $*.py > $@
 
-%.basic.run: simv out/%/trace.tr
-	(cd out/$*; $(SIMV) -no_save -reportstats +vcs+nostdout +wave=$(WAVE) +checker=basic -l simv.log)
-
 # %.basic.run: simv out/%/trace.tr
-# 	(cd out/$*; $(SIMV) +wave=$(WAVE) +checker=basic -l simv.log)
+# 	(cd out/$*; $(SIMV) -no_save -reportstats +vcs+nostdout +wave=$(WAVE) +checker=basic -l simv.log)
+
+%.basic.run: simv out/%/trace.tr
+	(cd out/$*; $(SIMV) +wave=$(WAVE) +checker=basic -l simv.log)
 
 %.dve:
 	$(DVE) -full64 -vpd out/$*/vcdplus.vpd &

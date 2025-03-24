@@ -335,11 +335,14 @@ module bsg_cache_miss
         chosen_way_n = track_miss_i ? tag_hit_way_id_i : (invalid_exist ? invalid_way_id : lru_way_id);
 
         dma_cmd_o = e_dma_send_fill_addr;          
-        dma_addr_o = {
-          addr_tag_v,
+        dma_addr_o =  decode_v_i.uncached_ld_op
+        ? {addr_tag_v,
           {(sets_p>1){addr_index_v}},
-          {(block_offset_width_lp){1'b0}}
-        };
+          {(block_size_in_words_p>1){addr_block_offset_v}},
+          {(lg_data_mask_width_lp){1'b0}}}
+        : {addr_tag_v,
+          {(sets_p>1){addr_index_v}},
+          {(block_offset_width_lp){1'b0}}};
 
         dma_fill_then_evict_o = notification_en_i & ~track_miss_i & ~decode_v_i.uncached_ld_op & stat_info_in.dirty[chosen_way_n] & valid_v_i[chosen_way_n];
 
@@ -415,7 +418,8 @@ module bsg_cache_miss
         dma_addr_o = decode_v_i.uncached_st_op
         ?  {addr_tag_v,
           {(sets_p>1){addr_index_v}},
-          {(block_offset_width_lp){1'b0}}}
+          {(block_size_in_words_p>1){addr_block_offset_v}},
+          {(lg_data_mask_width_lp){1'b0}}}
         :  {tag_v_i[dma_way_o],
           {(sets_p>1){addr_index_v}},
           {(block_offset_width_lp){1'b0}}};
@@ -589,15 +593,19 @@ module bsg_cache_miss
 
         miss_state_n = dma_done_i
           ? DONE
-          : GET_FILL_DATA;
+          : IO_GET_SNOOP_DATA;
       end
 
       
       IO_SEND_DATA: begin
         dma_cmd_o = e_dma_send_evict_data; 
-        dma_addr_o = {addr_tag_v,
+        dma_addr_o = {
+          addr_tag_v,
           {(sets_p>1){addr_index_v}},
-          {(block_offset_width_lp){1'b0}}};
+          {(block_size_in_words_p > 1){addr_block_offset_v}}, 
+          {(lg_data_mask_width_lp){1'b0}}
+        };
+
         miss_state_n = dma_done_i
           ? DONE
           : IO_SEND_DATA;

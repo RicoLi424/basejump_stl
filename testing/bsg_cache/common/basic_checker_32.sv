@@ -28,7 +28,8 @@ module basic_checker_32
   bsg_cache_pkt_s cache_pkt;
   assign cache_pkt = cache_pkt_i;
 
-  logic [data_width_p-1:0] shadow_mem [mem_size_p-1:0];
+  logic [data_width_p-1:0] shadow_dram_mem [mem_size_p-1:0];
+  logic [data_width_p-1:0] shadow_io_mem [mem_size_p-1:0];
   logic [data_width_p-1:0] result [*];
 
   wire [addr_width_p-1:0] cache_pkt_word_addr = cache_pkt.addr[addr_width_p-1:2];
@@ -80,7 +81,9 @@ module basic_checker_32
   logic [7:0] byte_sel;
   logic [15:0] half_sel;
 
-  assign load_data = shadow_mem[cache_pkt_word_addr];
+  assign load_data = (cache_pkt.opcode == IO_LW) 
+                   ? shadow_io_mem[cache_pkt_word_addr] 
+                   : shadow_dram_mem[cache_pkt_word_addr];
 
   bsg_mux #(
     .els_p(4)
@@ -129,8 +132,10 @@ module basic_checker_32
     if (reset_i) begin
       send_id <= '0;
       recv_id <= '0;
-      for (integer i = 0; i < mem_size_p; i++)
-        shadow_mem[i] = '0;
+      for (integer i = 0; i < mem_size_p; i++) begin
+        shadow_dram_mem[i] = '0;
+        shadow_io_mem[i] = '0;
+      end
     end
     else begin
 
@@ -151,59 +156,62 @@ module basic_checker_32
               result[send_id] = '0;
               send_id++;
               for (integer i = 0; i < data_mask_width_lp; i++)
-                if (store_mask[i])
-                  shadow_mem[cache_pkt_word_addr][8*i+:8] <= store_data[8*i+:8];
+                if (cache_pkt.opcode == IO_SW) begin
+                    shadow_io_mem[cache_pkt_word_addr][8*i+:8] <= store_data[8*i+:8];
+                end else if (store_mask[i]) begin
+                    shadow_dram_mem[cache_pkt_word_addr][8*i+:8] <= store_data[8*i+:8];
+                end
             end
             AMOSWAP_W: begin
               result[send_id] <= load_data;
               send_id <= send_id + 1;
-              shadow_mem[cache_pkt_word_addr] <= cache_pkt.data;
+              shadow_dram_mem[cache_pkt_word_addr] <= cache_pkt.data;
             end
             AMOADD_W: begin
               result[send_id] <= load_data;
               send_id <= send_id + 1;
-              shadow_mem[cache_pkt_word_addr] <= cache_pkt.data + load_data;
+              shadow_dram_mem[cache_pkt_word_addr] <= cache_pkt.data + load_data;
             end
             AMOXOR_W: begin
               result[send_id] <= load_data;
               send_id <= send_id + 1;
-              shadow_mem[cache_pkt_word_addr] <= cache_pkt.data ^ load_data;
+              shadow_dram_mem[cache_pkt_word_addr] <= cache_pkt.data ^ load_data;
             end
             AMOAND_W: begin
               result[send_id] <= load_data;
               send_id <= send_id + 1;
-              shadow_mem[cache_pkt_word_addr] <= cache_pkt.data & load_data;
+              shadow_dram_mem[cache_pkt_word_addr] <= cache_pkt.data & load_data;
             end
             AMOOR_W: begin
               result[send_id] <= load_data;
               send_id <= send_id + 1;
-              shadow_mem[cache_pkt_word_addr] <= cache_pkt.data | load_data;
+              shadow_dram_mem[cache_pkt_word_addr] <= cache_pkt.data | load_data;
             end
             AMOMIN_W: begin
               result[send_id] <= load_data;
               send_id <= send_id + 1;
-              shadow_mem[cache_pkt_word_addr] <= ($signed(cache_pkt.data) < $signed(load_data))
+              shadow_dram_mem[cache_pkt_word_addr] <= ($signed(cache_pkt.data) < $signed(load_data))
                 ? cache_pkt.data
                 : load_data;
             end
             AMOMAX_W: begin
               result[send_id] <= load_data;
               send_id <= send_id + 1;
-              shadow_mem[cache_pkt_word_addr] <= ($signed(cache_pkt.data) > $signed(load_data))
+              shadow_dram_mem[cache_pkt_word_addr] <= ($signed(cache_pkt.data) > $signed(load_data))
                 ? cache_pkt.data
                 : load_data;
             end
             AMOMINU_W: begin
               result[send_id] <= load_data;
               send_id <= send_id + 1;
-              shadow_mem[cache_pkt_word_addr] <= (cache_pkt.data < load_data)
+              shadow_dram_mem[cache_pkt_word_addr] <= (cache_pkt.data < load_data)
                 ? cache_pkt.data
                 : load_data;
             end
             AMOMAXU_W: begin
               result[send_id] <= load_data;
               send_id <= send_id + 1;
-              shadow_mem[cache_pkt_word_addr] <= (cache_pkt.data > load_data)
+              shadow_dram_mem[cache_pkt_word_addr] <= (cache_pkt.data > load_data)
                 ? cache_pkt.data
                 : load_data;
             end

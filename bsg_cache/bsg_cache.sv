@@ -1173,8 +1173,8 @@ end
   //    During miss, the store buffer can be drained.
   assign sbuf_yumi_li = sbuf_v_lo
     & ~((decode.ld_op | decode.atomic_op) & yumi_o)
-    & (~dma_data_mem_v_lo)
-    & ~(v_tl_r & (decode_tl_r.ld_op | decode_tl_r.atomic_op) & (~v_we) & (~miss_v)); 
+    & (~dma_data_mem_v_lo)                        // bc io read/write don't do recovery in mhu ⬇ 
+    & ~(v_tl_r & (decode_tl_r.ld_op | decode_tl_r.atomic_op) & (~v_we) & (~(miss_v & (~uncached_op)))); 
 
   assign sbuf_bypass_addr_li = addr_tl_r;
   assign sbuf_bypass_v_li = (decode_tl_r.ld_op | decode_tl_r.atomic_op) & v_tl_r & v_we;
@@ -1193,7 +1193,7 @@ end
   assign tbuf_yumi_li = tbuf_v_lo
     & ~((decode.ld_op | decode.atomic_op | partial_st) & yumi_o)
     & (~miss_track_mem_v_lo)
-    & ~(v_tl_r & (decode_tl_r.ld_op | decode_tl_r.atomic_op | partial_st_tl) & (~v_we) & (~miss_v));
+    & ~(v_tl_r & (decode_tl_r.ld_op | decode_tl_r.atomic_op | partial_st_tl) & (~v_we) & (~(miss_v & (~uncached_op))));
 
   assign tbuf_bypass_addr_li = addr_tl_r;
   assign tbuf_bypass_v_li = (decode_tl_r.ld_op | decode_tl_r.atomic_op | partial_st_tl) & v_tl_r & v_we;

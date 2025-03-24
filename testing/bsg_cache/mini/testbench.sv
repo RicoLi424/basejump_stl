@@ -286,6 +286,7 @@ module testbench();
      ,.wh_ruche_factor_p(wh_ruche_factor_p)
      ,.no_concentration_p(1)
      ,.no_coordination_p(1)
+     ,.is_io_mem_p(1)
      ,.mem_size_p(2**addr_width_p-1)
      )
    io_mem
@@ -542,6 +543,7 @@ module testbench();
      //,.no_coordination_p(0)
      ,.no_concentration_p(1)
      ,.no_coordination_p(1)
+     ,.is_io_mem_p(0)
      ,.mem_size_p(2**addr_width_p-1)
      )
    dram_mem

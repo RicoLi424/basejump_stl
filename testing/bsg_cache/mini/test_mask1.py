@@ -10,16 +10,20 @@ class TestMask1(TestBase):
 
     for iteration in range(10):
       for i in range(10000):
-        tag = random.randint(0,9)
+        tag0 = random.randint(0,9)
+        tag1 = random.randint(10,15)
         index = random.randint(0,2)
         block_offset = random.randint(0,self.block_size_in_words_p-1)
-        taddr = self.get_addr(tag, index, block_offset)
+        taddr0 = self.get_addr(tag0, index, block_offset)
+        taddr1 = self.get_addr(tag1, index, block_offset)
         store_not_load = random.randint(0,1)
         mask = random.randint(0, 15)
         if store_not_load:
-          self.send_sm(taddr, mask)
+          self.send_sm(taddr0, mask)
+          self.send_io_sw(taddr1)
         else:
-          self.send_lm(taddr, mask)
+          self.send_lm(taddr0, mask)
+          self.send_io_lw(taddr1)
 
     self.tg.done()
   

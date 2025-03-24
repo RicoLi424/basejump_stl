@@ -23,7 +23,7 @@ module bsg_cache_decode
       // word
       AMOSWAP_W, AMOADD_W, AMOAND_W, AMOOR_W, AMOXOR_W,
       AMOMIN_W, AMOMAX_W, AMOMINU_W, AMOMAXU_W,
-      LW, SW, LWU: decode_o.data_size_op = 2'b10;
+      LW, SW, LWU, IO_LW, IO_SW: decode_o.data_size_op = 2'b10;
       // half
       LH, SH, LHU: decode_o.data_size_op = 2'b01;
       // byte

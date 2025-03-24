@@ -18,6 +18,9 @@ module bsg_nonsynth_wormhole_test_mem
     // determines address hashing based on cid and src_cord
     , parameter no_concentration_p=0
     , parameter no_coordination_p=0
+
+    // determines if the test memory is used for io reads and writes
+    , parameter is_io_mem_p=0
   
     , parameter dma_ratio_lp = (vcache_dma_data_width_p/vcache_data_width_p)
     , parameter data_len_lp = (vcache_block_size_in_words_p/dma_ratio_lp)
@@ -27,8 +30,8 @@ module bsg_nonsynth_wormhole_test_mem
     , parameter mem_addr_width_lp = `BSG_SAFE_CLOG2(mem_els_lp)
 
     , parameter lg_wh_ruche_factor_lp = $clog2(wh_ruche_factor_p)
-
-
+    
+    , parameter byte_offset_width_lp = `BSG_SAFE_CLOG2(vcache_data_width_p>>3)
     , parameter block_offset_width_lp = `BSG_SAFE_CLOG2((vcache_data_width_p>>3)*vcache_block_size_in_words_p)
 
     , parameter wh_link_sif_width_lp =
@@ -141,7 +144,7 @@ module bsg_nonsynth_wormhole_test_mem
   assign header_flit_out.src_cord = '0;   // dont care
   assign header_flit_out.src_cid = '0;   // dont care
   assign header_flit_out.cid = src_cid_r;
-  assign header_flit_out.len = wh_len_width_p'(data_len_lp);
+  assign header_flit_out.len = is_io_mem_p ? wh_len_width_p'(1) : wh_len_width_p'(data_len_lp);
   assign header_flit_out.cord = src_cord_r;
 
   always_comb begin
@@ -205,9 +208,9 @@ module bsg_nonsynth_wormhole_test_mem
         wh_link_sif_out.ready_and_rev = 1'b1;
         if (wh_link_sif_in.v) begin
           mem_we = 1'b1;
-          up_li = (count_lo != data_len_lp-1);
-          clear_li = (count_lo == data_len_lp-1);
-          mem_state_n = (count_lo == data_len_lp-1)
+          up_li = (~is_io_mem_p) & (count_lo != data_len_lp-1);
+          clear_li = (~is_io_mem_p) & (count_lo == data_len_lp-1);
+          mem_state_n = (is_io_mem_p | (count_lo == data_len_lp-1))
             ? READY
             : RECV_EVICT_DATA;
         end
@@ -225,9 +228,9 @@ module bsg_nonsynth_wormhole_test_mem
         wh_link_sif_out.v = 1'b1;
         wh_link_sif_out.data = mem_r_data_filtered;
         if (wh_link_sif_in.ready_and_rev) begin
-          clear_li = (count_lo == data_len_lp-1);
-          up_li = (count_lo != data_len_lp-1);
-          mem_state_n = (count_lo == data_len_lp-1)
+          clear_li = (~is_io_mem_p) & (count_lo == data_len_lp-1);
+          up_li = (~is_io_mem_p) & (count_lo != data_len_lp-1);
+          mem_state_n = (is_io_mem_p | (count_lo == data_len_lp-1))
             ? READY
             : SEND_FILL_DATA;
         end
@@ -246,27 +249,30 @@ module bsg_nonsynth_wormhole_test_mem
   // address hashing
   if (no_coordination_p) begin
     // no concentration or coordination. each wh ruche link gets a test_mem.
-    assign mem_addr = {
-      addr_r[block_offset_width_lp+:mem_addr_width_lp-lg_num_vcaches_lp-count_width_lp],
-      count_lo
-    };
+    assign mem_addr = is_io_mem_p
+    ? {addr_r[byte_offset_width_lp+:mem_addr_width_lp-lg_num_vcaches_lp-count_width_lp]}
+    : {addr_r[block_offset_width_lp+:mem_addr_width_lp-lg_num_vcaches_lp-count_width_lp],
+      count_lo};
   end
   else if (no_concentration_p) begin
     // no concentration. each wh ruche link gets a test_mem.
-    assign mem_addr = {
-      src_cord_r[lg_wh_ruche_factor_lp+:lg_num_vcaches_lp],
+    assign mem_addr = is_io_mem_p
+    ? {src_cord_r[lg_wh_ruche_factor_lp+:lg_num_vcaches_lp],
+      addr_r[byte_offset_width_lp+:mem_addr_width_lp-lg_num_vcaches_lp-count_width_lp]}
+    : {src_cord_r[lg_wh_ruche_factor_lp+:lg_num_vcaches_lp],
       addr_r[block_offset_width_lp+:mem_addr_width_lp-lg_num_vcaches_lp-count_width_lp],
-      count_lo
-    };
+      count_lo};
   end
   else begin
     // wh ruche links coming from top and bottom caches are concentrated into one link.
-    assign mem_addr = {
-      (1)'(src_cid_r/wh_ruche_factor_p), // determine north or south vcache
+    assign mem_addr = is_io_mem_p
+    ? {(1)'(src_cid_r/wh_ruche_factor_p),
+      src_cord_r[0+:(lg_num_vcaches_lp-1)],
+      addr_r[byte_offset_width_lp+:mem_addr_width_lp-lg_num_vcaches_lp-count_width_lp]}
+    : {(1)'(src_cid_r/wh_ruche_factor_p), // determine north or south vcache
       src_cord_r[0+:(lg_num_vcaches_lp-1)],
       addr_r[block_offset_width_lp+:mem_addr_width_lp-lg_num_vcaches_lp-count_width_lp],
-      count_lo
-    };
+      count_lo};
   end
 
 
