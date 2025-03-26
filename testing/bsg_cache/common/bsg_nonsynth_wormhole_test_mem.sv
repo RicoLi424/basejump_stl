@@ -183,13 +183,13 @@ module bsg_nonsynth_wormhole_test_mem
         wh_link_sif_out.ready_and_rev = 1'b1;
         if (wh_link_sif_in.v) begin
           addr_n = wh_link_sif_in.data;
-          mask_n = (opcode_r == e_cache_wh_write_non_masked)
+          mask_n = ((opcode_r == e_cache_wh_write_non_masked) || (opcode_r == e_cache_wh_io_write))
             ? ('1)
             : mask_r;
           case (opcode_r)
-            e_cache_wh_read:              mem_state_n = SEND_FILL_HEADER;
-            e_cache_wh_write_non_masked:  mem_state_n = RECV_EVICT_DATA;
-            e_cache_wh_write_masked:      mem_state_n = RECV_MASK;
+            e_cache_wh_read, e_cache_wh_io_read:               mem_state_n = SEND_FILL_HEADER;
+            e_cache_wh_write_non_masked, e_cache_wh_io_write:  mem_state_n = RECV_EVICT_DATA;
+            e_cache_wh_write_masked:                           mem_state_n = RECV_MASK;
             // This never happens.
             default: mem_state_n = READY; 
           endcase

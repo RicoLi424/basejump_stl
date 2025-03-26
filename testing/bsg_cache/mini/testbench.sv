@@ -99,7 +99,7 @@ module testbench();
   localparam [wh_cord_width_p-1:0] io_cord_lp = {{(wh_cord_width_p-1){1'b1}},1'b0};
 
   `declare_bsg_cache_wh_header_flit_s(wh_flit_width_p,wh_cord_width_p,wh_len_width_p,wh_cid_width_p);
-  `declare_bsg_cache_wh_notify_info_s(wh_flit_width_p, wh_cord_width_p, wh_len_width_p, wh_cid_width_p, ways_p);
+  // `declare_bsg_cache_wh_notify_info_s(wh_flit_width_p, wh_cord_width_p, wh_len_width_p, wh_cid_width_p, ways_p);
   // DUT
   for (genvar i = 0; i < num_dma_p; i++)
     begin : cache
@@ -156,12 +156,18 @@ module testbench();
       bsg_cache_wh_header_flit_s header_flit;
       assign header_flit = wh_link_sif_lo[i].data;
       // TODO: make into opcode... or at least the header flit struct itself
-      bsg_cache_wh_notify_info_s notify_info;
-      assign notify_info = header_flit.unused;
-      wire [wh_cord_width_p-1:0] dest_wh_cord_li = notify_info.io_op
+      // bsg_cache_wh_notify_info_s notify_info;
+      // assign notify_info = header_flit.unused;
+      // wire [wh_cord_width_p-1:0] dest_wh_cord_li = notify_info.io_op
+      //   ? io_cord_lp
+      //   : mem_cord_lp;
+      // wire [wh_cid_width_p-1:0] dest_wh_cid_li = notify_info.write_validate
+      //   ? shadow_cid_lp
+      //   : mem_cid_lp;
+      wire [wh_cord_width_p-1:0] dest_wh_cord_li = ((header_flit.opcode == e_cache_wh_io_read) || (header_flit.opcode == e_cache_wh_io_write))
         ? io_cord_lp
         : mem_cord_lp;
-      wire [wh_cid_width_p-1:0] dest_wh_cid_li = notify_info.write_validate
+      wire [wh_cid_width_p-1:0] dest_wh_cid_li = (header_flit.opcode == e_cache_wh_write_validate)
         ? shadow_cid_lp
         : mem_cid_lp;
       bsg_cache_dma_to_wormhole #(
@@ -509,8 +515,8 @@ module testbench();
 
   bsg_cache_wh_header_flit_s shadow_header_flit;
   assign shadow_header_flit = shadow_link_sif_lo.data;
-  bsg_cache_wh_notify_info_s shadow_notify_info;
-  assign shadow_notify_info = shadow_header_flit.unused;
+  // bsg_cache_wh_notify_info_s shadow_notify_info;
+  // assign shadow_notify_info = shadow_header_flit.unused;
   logic shadow_expecting_header_r_lo;
   bsg_wormhole_router_packet_parser
    #(.payload_len_bits_p($bits(shadow_header_flit.len)))
@@ -523,8 +529,14 @@ module testbench();
      ,.expecting_header_r_o(shadow_expecting_header_r_lo)
      );
 
+  // always_ff @(negedge clk) begin
+  //   if (shadow_expecting_header_r_lo && shadow_link_sif_lo.v && !shadow_notify_info.write_validate) begin
+  //     $error("write_validate !set for shadow link packet");
+  //   end
+  // end
+
   always_ff @(negedge clk) begin
-    if (shadow_expecting_header_r_lo && shadow_link_sif_lo.v && !shadow_notify_info.write_validate) begin
+    if (shadow_expecting_header_r_lo && shadow_link_sif_lo.v && (shadow_header_flit.opcode != e_cache_wh_write_validate)) begin
       $error("write_validate !set for shadow link packet");
     end
   end
@@ -555,8 +567,8 @@ module testbench();
 
    bsg_cache_wh_header_flit_s dram_header_flit;
    assign dram_header_flit = dram_link_sif_lo.data;
-   bsg_cache_wh_notify_info_s dram_notify_info;
-   assign dram_notify_info = dram_header_flit.unused;
+  //  bsg_cache_wh_notify_info_s dram_notify_info;
+  //  assign dram_notify_info = dram_header_flit.unused;
    logic dram_expecting_header_r_lo;
    bsg_wormhole_router_packet_parser
     #(.payload_len_bits_p($bits(dram_header_flit.len)))
@@ -569,8 +581,14 @@ module testbench();
       ,.expecting_header_r_o(dram_expecting_header_r_lo)
       );
  
+  //  always_ff @(negedge clk) begin
+  //    if (dram_expecting_header_r_lo && dram_link_sif_lo.v && dram_notify_info.write_validate) begin
+  //      $error("write_validate set for dram link packet");
+  //    end
+  //  end
+
    always_ff @(negedge clk) begin
-     if (dram_expecting_header_r_lo && dram_link_sif_lo.v && dram_notify_info.write_validate) begin
+     if (dram_expecting_header_r_lo && dram_link_sif_lo.v && (dram_header_flit.opcode == e_cache_wh_write_validate)) begin
        $error("write_validate set for dram link packet");
      end
    end

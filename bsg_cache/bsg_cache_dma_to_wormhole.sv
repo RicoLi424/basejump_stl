@@ -160,21 +160,22 @@ module bsg_cache_dma_to_wormhole
   bsg_cache_wh_header_flit_s header_flit;
   // for convinience, we use the unused field to store the way_id, read_pending bit, uncached_op and write_validate bit here
   // instead of splitting them into separate new fields
-  assign header_flit.unused = {'0, dma_pkt_lo.write_validate, dma_pkt_lo.uncached_op, dma_pkt_lo.read_pending, dma_pkt_lo.way_id};
-  // assign header_flit.opcode = dma_pkt_lo.write_validate
-  //   ? e_cache_wh_write_validate
-  //   : (dma_pkt_lo.write_not_read
-  //     ? (dma_pkt_lo.uncached_op 
-  //       ? e_cache_wh_io_write
-  //       : (mask_all_one 
-  //         ? e_cache_wh_write_non_masked 
-  //         : e_cache_wh_write_masked))
-  //     : (dma_pkt_lo.uncached_op ? e_cache_wh_io_read : e_cache_wh_read));
-  assign header_flit.opcode = dma_pkt_lo.write_not_read
-                            ? (mask_all_one 
-                              ? e_cache_wh_write_non_masked 
-                              : e_cache_wh_write_masked)
-                            : e_cache_wh_read;
+  // assign header_flit.unused = {'0, dma_pkt_lo.write_validate, dma_pkt_lo.uncached_op, dma_pkt_lo.read_pending, dma_pkt_lo.way_id};
+  assign header_flit.unused = {'0, dma_pkt_lo.read_pending, dma_pkt_lo.way_id};
+  assign header_flit.opcode = dma_pkt_lo.write_validate
+    ? e_cache_wh_write_validate
+    : (dma_pkt_lo.write_not_read
+      ? (dma_pkt_lo.uncached_op 
+        ? e_cache_wh_io_write
+        : (mask_all_one 
+          ? e_cache_wh_write_non_masked 
+          : e_cache_wh_write_masked))
+      : (dma_pkt_lo.uncached_op ? e_cache_wh_io_read : e_cache_wh_read));
+  // assign header_flit.opcode = dma_pkt_lo.write_not_read
+  //                           ? (mask_all_one 
+  //                             ? e_cache_wh_write_non_masked 
+  //                             : e_cache_wh_write_masked)
+  //                           : e_cache_wh_read;
   assign header_flit.src_cid = my_wh_cid_i;
   assign header_flit.src_cord = my_wh_cord_i;
   assign header_flit.len = dma_pkt_lo.write_not_read
