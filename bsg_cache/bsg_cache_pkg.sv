@@ -162,7 +162,7 @@ package bsg_cache_pkg;
     // header + addr 
     ,e_cache_wh_io_read = 3'b100
 
-    // len = 1 + (# data flits)
+    // len = 1 + 1
     // header + addr + data
     ,e_cache_wh_io_write = 3'b101
   } bsg_cache_wh_opcode_e;
