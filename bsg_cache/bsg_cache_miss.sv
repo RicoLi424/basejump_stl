@@ -332,7 +332,7 @@ module bsg_cache_miss
         // by stats_mem_info is locked, it will be overridden by 
         // the bsg_lru_pseudo_tree_backup.
         // On track miss, the chosen way is the tag hit way.
-        chosen_way_n = track_miss_i ? tag_hit_way_id_i : (invalid_exist ? invalid_way_id : lru_way_id);
+        chosen_way_n = decode_v_i.uncached_ld_op ? '0 : (track_miss_i ? tag_hit_way_id_i : (invalid_exist ? invalid_way_id : lru_way_id));
 
         dma_cmd_o = e_dma_send_fill_addr;          
         dma_addr_o =  decode_v_i.uncached_ld_op
@@ -344,7 +344,7 @@ module bsg_cache_miss
           {(sets_p>1){addr_index_v}},
           {(block_offset_width_lp){1'b0}}};
 
-        dma_fill_then_evict_o = notification_en_i & ~track_miss_i & ~decode_v_i.uncached_ld_op & stat_info_in.dirty[chosen_way_n] & valid_v_i[chosen_way_n];
+        dma_fill_then_evict_o = notification_en_i & ~decode_v_i.uncached_ld_op & ~track_miss_i & ~decode_v_i.uncached_ld_op & stat_info_in.dirty[chosen_way_n] & valid_v_i[chosen_way_n];
 
         // if the chosen way is dirty and valid, then evict.
         miss_state_n = dma_done_i
